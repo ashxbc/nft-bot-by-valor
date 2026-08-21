@@ -59,7 +59,6 @@ A Telegram bot interface for sniping SeaDrop NFT mints, built with **grammY**, *
 ### 2. Install & Configure
 
 ```bash
-cd seadrop-sniper-bot
 npm install
 cp .env.example .env
 ```
@@ -184,20 +183,22 @@ This starts the bot with long-polling (no Vercel needed).
 ## Project Structure
 
 ```
-seadrop-sniper-bot/
 ├── api/
 │   └── index.ts          # Express webhook server (Vercel entry point)
+├── contracts/
+│   └── MockSeaDrop.sol   # Mock SeaDrop contract for testing
 ├── src/
+│   ├── index.ts          # Local development entry point (long-polling)
 │   ├── bot.ts            # grammY bot: commands, wizard, middleware
 │   ├── chains.ts         # Chain registry (Robinhood Chain 4663)
 │   ├── seadrop.ts        # SeaDrop mintPublic() calldata builder
 │   ├── mint.ts           # Sign → blast → receipt pipeline
 │   └── session.ts        # AES-256-GCM encrypted wallet storage
 ├── .env.example          # Environment template
-├── package.json          # Dependencies
+├── package.json          # Dependencies & scripts
 ├── tsconfig.json         # TypeScript config
 ├── vercel.json           # Vercel deployment config
-└── README.md             # This file
+└── README.md             # Documentation
 ```
 
 ## How It Works
