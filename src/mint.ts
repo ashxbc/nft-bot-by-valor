@@ -10,7 +10,13 @@ export interface MintResult {
   walletIndex: number;
   address: string;
   txHash: string;
-  status: "dispatched" | "accepted" | "rejected" | "confirmed" | "failed" | "timeout";
+  status:
+    | "dispatched"
+    | "accepted"
+    | "rejected"
+    | "confirmed"
+    | "failed"
+    | "timeout";
   blockNumber?: number;
   gasUsed?: string;
   error?: string;
@@ -20,11 +26,12 @@ export interface MintResult {
 // Resolve RPC URLs: custom > env default > chain defaults
 export function resolveRpcUrls(
   customRpc: string,
-  additionalRpcEnv: string
+  additionalRpcEnv: string,
 ): string[] {
   const urls: string[] = [];
   if (customRpc) urls.push(customRpc);
-  const defaultRpc = process.env.DEFAULT_RPC_URL || "https://rpc.mainnet.chain.robinhood.com";
+  const defaultRpc =
+    process.env.DEFAULT_RPC_URL || "https://rpc.mainnet.chain.robinhood.com";
   urls.push(defaultRpc);
   if (additionalRpcEnv) {
     urls.push(...additionalRpcEnv.split(",").filter(Boolean));
@@ -35,13 +42,15 @@ export function resolveRpcUrls(
 // Pre-fetch nonces and warm connections
 async function prepareWallets(
   walletKeys: string[],
-  rpcUrl: string
+  rpcUrl: string,
 ): Promise<{ wallets: Wallet[]; nonces: number[]; chainId: bigint }> {
   const provider = new JsonRpcProvider(rpcUrl);
   const wallets = walletKeys.map((k) => new Wallet(k, provider));
 
   const [nonces, network] = await Promise.all([
-    Promise.all(wallets.map((w) => provider.getTransactionCount(w.address, "pending"))),
+    Promise.all(
+      wallets.map((w) => provider.getTransactionCount(w.address, "pending")),
+    ),
     provider.getNetwork(),
   ]);
 
@@ -55,7 +64,7 @@ export async function signTransactions(
   rpcUrl: string,
   maxFeePerGas: bigint,
   maxPriorityFee: bigint,
-  gasLimit: number
+  gasLimit: number,
 ): Promise<{
   prepared: { address: string; rawTx: string; txHash: string }[];
   chainId: bigint;
@@ -95,7 +104,7 @@ export async function signTransactions(
 export async function blastTransactions(
   prepared: { address: string; rawTx: string; txHash: string }[],
   rpcUrls: string[],
-  chainId: bigint
+  chainId: bigint,
 ): Promise<MintResult[]> {
   const results: MintResult[] = [];
 
@@ -110,21 +119,24 @@ export async function blastTransactions(
           params: [p.rawTx],
           id: 1,
         }),
-      }).then(async (res) => {
-        const json = (await res.json()) as any;
-        return { url, result: json.result, error: json.error };
-      }).catch((err) => ({
-        url,
-        result: null,
-        error: { message: err.message },
-      }))
+      })
+        .then(async (res) => {
+          const json = (await res.json()) as any;
+          return { url, result: json.result, error: json.error };
+        })
+        .catch((err) => ({
+          url,
+          result: null,
+          error: { message: err.message },
+        })),
     );
 
     const responses = await Promise.allSettled(firePromises);
     const accepted = responses.some(
       (r) =>
         r.status === "fulfilled" &&
-        (r.value.result || (r.value.error?.message || "").includes("already known"))
+        (r.value.result ||
+          (r.value.error?.message || "").includes("already known")),
     );
 
     results.push({
@@ -138,7 +150,7 @@ export async function blastTransactions(
         : "Rejected by all RPCs: " +
           responses
             .filter(
-              (r): r is PromiseFulfilledResult<any> => r.status === "fulfilled"
+              (r): r is PromiseFulfilledResult<any> => r.status === "fulfilled",
             )
             .map((r) => r.value.error?.message || "unknown")
             .filter(Boolean)
@@ -153,7 +165,7 @@ export async function blastTransactions(
 export async function waitForReceipt(
   txHash: string,
   rpcUrl: string,
-  timeoutMs: number = 60_000
+  timeoutMs: number = 60_000,
 ): Promise<{ block: number; gasUsed: string; status: string } | null> {
   const start = Date.now();
 
@@ -195,7 +207,7 @@ export async function executeSnipe(
   maxPriorityFee: bigint,
   gasLimit: number,
   chainId: bigint,
-  onLog: (log: LogEntry) => void
+  onLog: (log: LogEntry) => void,
 ): Promise<MintResult[]> {
   onLog({
     timestamp: new Date(),
@@ -209,7 +221,7 @@ export async function executeSnipe(
     rpcUrls[0],
     maxFeePerGas,
     maxPriorityFee,
-    gasLimit
+    gasLimit,
   );
 
   onLog({
@@ -271,7 +283,7 @@ export async function executeSnipe(
             type: "warning",
           });
         }
-      })
+      }),
     );
   }
 

@@ -19,9 +19,7 @@ export const CHAINS: ChainProfile[] = [
     explorer: "https://explorer.mainnet.chain.robinhood.com",
     nativeSymbol: "ETH",
     rpc: {
-      public: [
-        "https://rpc.mainnet.chain.robinhood.com",
-      ],
+      public: ["https://rpc.mainnet.chain.robinhood.com"],
     },
   },
 ];
@@ -29,7 +27,7 @@ export const CHAINS: ChainProfile[] = [
 export const DEFAULT_CHAIN = CHAINS[0];
 
 export function resolveChain(
-  idOrKey: string | number | bigint | null | undefined
+  idOrKey: string | number | bigint | null | undefined,
 ): ChainProfile | undefined {
   if (idOrKey === null || idOrKey === undefined) return DEFAULT_CHAIN;
   if (typeof idOrKey === "string") {
@@ -42,7 +40,7 @@ export function resolveChain(
 
 export function explorerTx(
   idOrKey: string | number | bigint | null | undefined,
-  txHash: string
+  txHash: string,
 ): string {
   const profile = resolveChain(idOrKey);
   const base = profile?.explorer ?? DEFAULT_CHAIN.explorer;
@@ -51,7 +49,7 @@ export function explorerTx(
 
 export function explorerAddress(
   idOrKey: string | number | bigint | null | undefined,
-  address: string
+  address: string,
 ): string {
   const profile = resolveChain(idOrKey);
   const base = profile?.explorer ?? DEFAULT_CHAIN.explorer;

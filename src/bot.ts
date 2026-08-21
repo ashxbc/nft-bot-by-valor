@@ -4,7 +4,13 @@
 
 import "dotenv/config";
 import { Bot, Context, session, SessionFlavor, NextFunction } from "grammy";
-import { Wallet, parseUnits, formatEther, JsonRpcProvider, isAddress } from "ethers";
+import {
+  Wallet,
+  parseUnits,
+  formatEther,
+  JsonRpcProvider,
+  isAddress,
+} from "ethers";
 import {
   UserSession,
   createDefaultSession,
@@ -20,7 +26,9 @@ type BotContext = Context & SessionFlavor<UserSession>;
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 if (!BOT_TOKEN) {
-  console.error("❌ BOT_TOKEN is required. Set it in .env or environment variables.");
+  console.error(
+    "❌ BOT_TOKEN is required. Set it in .env or environment variables.",
+  );
   process.exit(1);
 }
 
@@ -46,11 +54,14 @@ function link(label: string, url: string): string {
 // ─────────────────────────────────────────────────────────────────────────────
 // PENDING MESSAGE HANDLER REGISTRY
 // ─────────────────────────────────────────────────────────────────────────────
-const pendingHandlers = new Map<number, (ctx: BotContext, next: NextFunction) => Promise<void>>();
+const pendingHandlers = new Map<
+  number,
+  (ctx: BotContext, next: NextFunction) => Promise<void>
+>();
 
 function registerPendingHandler(
   chatId: number,
-  handler: (ctx: BotContext, next: NextFunction) => Promise<void>
+  handler: (ctx: BotContext, next: NextFunction) => Promise<void>,
 ) {
   pendingHandlers.set(chatId, handler);
 }
@@ -61,7 +72,7 @@ function registerPendingHandler(
 bot.use(
   session({
     initial: createDefaultSession,
-  })
+  }),
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -91,7 +102,7 @@ bot.command("start", async (ctx) => {
   const chain = resolveChain(sess.settings.activeChain);
   const walletCount = sess.walletAddresses.length;
   const activeSnipes = sess.activeSnipes.filter(
-    (s) => s.status === "pending" || s.status === "waiting"
+    (s) => s.status === "pending" || s.status === "waiting",
   ).length;
 
   const walletLines =
@@ -99,7 +110,10 @@ bot.command("start", async (ctx) => {
       ? "⚠️ No wallets loaded. Use /wallets to add one."
       : `✅ ${walletCount} wallet(s) ready:\n` +
         sess.walletAddresses
-          .map((addr, i) => `  ${i + 1}. ${code(addr.slice(0, 10) + "..." + addr.slice(-8))}`)
+          .map(
+            (addr, i) =>
+              `  ${i + 1}. ${code(addr.slice(0, 10) + "..." + addr.slice(-8))}`,
+          )
           .join("\n");
 
   const rpcDisplay = sess.settings.customRpc
@@ -123,7 +137,10 @@ bot.command("start", async (ctx) => {
     `/status — View logs and active tasks\n` +
     `/cancel — Abort pending tasks`;
 
-  await ctx.reply(text, { parse_mode: "HTML", link_preview_options: { is_disabled: true } });
+  await ctx.reply(text, {
+    parse_mode: "HTML",
+    link_preview_options: { is_disabled: true },
+  });
 });
 
 // /wallets — Wallet manager menu
@@ -148,9 +165,9 @@ bot.command("wallets_add", async (ctx) => {
 
   await ctx.reply(
     `🔑 <b>Send me a private key to add.</b>\n\n` +
-    `The key is encrypted in memory and never saved to disk.\n` +
-    `Send /cancel_w to abort.`,
-    { parse_mode: "HTML" }
+      `The key is encrypted in memory and never saved to disk.\n` +
+      `Send /cancel_w to abort.`,
+    { parse_mode: "HTML" },
   );
 
   registerPendingHandler(chatId, async (msgCtx, _next) => {
@@ -172,11 +189,11 @@ bot.command("wallets_add", async (ctx) => {
 
       await msgCtx.reply(
         `✅ <b>Wallet added!</b>\n\nAddress: ${code(wallet.address)}`,
-        { parse_mode: "HTML" }
+        { parse_mode: "HTML" },
       );
     } catch (err: any) {
       await msgCtx.reply(
-        `❌ <b>Invalid private key:</b> ${esc(err.message || "Could not parse key")}`
+        `❌ <b>Invalid private key:</b> ${esc(err.message || "Could not parse key")}`,
       );
     }
   });
@@ -208,12 +225,13 @@ bot.command("wallets_view", async (ctx) => {
       } catch {
         return `${i + 1}. ${code(addr)}\n   💰 Balance: unknown`;
       }
-    })
+    }),
   );
 
   await ctx.reply(
-    `👤 <b>Your Wallets (${sess.walletAddresses.length}):</b>\n\n` + lines.join("\n\n"),
-    { parse_mode: "HTML" }
+    `👤 <b>Your Wallets (${sess.walletAddresses.length}):</b>\n\n` +
+      lines.join("\n\n"),
+    { parse_mode: "HTML" },
   );
 });
 
@@ -236,9 +254,9 @@ bot.command("snipe", async (ctx) => {
   sess.snipeWizard = { step: 1 };
   await ctx.reply(
     `🎯 <b>SeaDrop Snipe Wizard</b>\n\n` +
-    `Step 1/6: <b>Contract Address</b>\n` +
-    `Send the NFT contract address (0x...).`,
-    { parse_mode: "HTML" }
+      `Step 1/6: <b>Contract Address</b>\n` +
+      `Send the NFT contract address (0x...).`,
+    { parse_mode: "HTML" },
   );
 });
 
@@ -255,15 +273,19 @@ bot.command("confirm_snipe", async (ctx) => {
   const chain = resolveChain(sess.settings.activeChain);
   const rpcUrls = resolveRpcUrls(
     sess.settings.customRpc,
-    process.env.ADDITIONAL_RPC_URLS || ""
+    process.env.ADDITIONAL_RPC_URLS || "",
   );
 
   await ctx.reply("🔍 Building mint plan from on-chain data...");
 
-  const plan = await buildMintPlan(rpcUrls[0], wizard.contractAddress, wizard.quantity!);
+  const plan = await buildMintPlan(
+    rpcUrls[0],
+    wizard.contractAddress,
+    wizard.quantity!,
+  );
   if (!plan) {
     await ctx.reply(
-      "❌ Could not build mint plan. Contract may not be a SeaDrop collection."
+      "❌ Could not build mint plan. Contract may not be a SeaDrop collection.",
     );
     sess.snipeWizard = undefined;
     return;
@@ -280,7 +302,9 @@ bot.command("confirm_snipe", async (ctx) => {
     maxFeePerGas: wizard.maxFeePerGas!,
     maxPriorityFee: wizard.maxPriorityFee!,
     timingMode: wizard.timingMode!,
-    scheduledTime: wizard.scheduledTime ? new Date(wizard.scheduledTime) : undefined,
+    scheduledTime: wizard.scheduledTime
+      ? new Date(wizard.scheduledTime)
+      : undefined,
     status: wizard.timingMode === "now" ? "firing" : "waiting",
     txHashes: [],
     startedAt: new Date(),
@@ -301,14 +325,15 @@ bot.command("confirm_snipe", async (ctx) => {
         maxTip,
         250_000,
         BigInt(chain?.chainId || DEFAULT_CHAIN.chainId),
-        (log) => sess.logs.push(log)
+        (log) => sess.logs.push(log),
       );
 
       activeSnipe.txHashes = results.map((r) => r.txHash);
       activeSnipe.status = "completed";
 
       const resultLines = results.map((r) => {
-        const icon = r.status === "confirmed" ? "✅" : r.status === "failed" ? "❌" : "⏳";
+        const icon =
+          r.status === "confirmed" ? "✅" : r.status === "failed" ? "❌" : "⏳";
         const addr = r.address.slice(0, 10) + "..." + r.address.slice(-6);
         const txLabel = r.txHash.slice(0, 16) + "...";
         let line = `${icon} ${code(addr)}\n  TX: ${link(txLabel, r.explorerUrl)}`;
@@ -320,11 +345,13 @@ bot.command("confirm_snipe", async (ctx) => {
 
       await ctx.reply(
         `📊 <b>Snipe Results</b>\n\n` + resultLines.join("\n\n"),
-        { parse_mode: "HTML", link_preview_options: { is_disabled: true } }
+        { parse_mode: "HTML", link_preview_options: { is_disabled: true } },
       );
     } catch (err: any) {
       activeSnipe.status = "failed";
-      await ctx.reply(`❌ <b>Snipe failed:</b> ${esc(err.message)}`, { parse_mode: "HTML" });
+      await ctx.reply(`❌ <b>Snipe failed:</b> ${esc(err.message)}`, {
+        parse_mode: "HTML",
+      });
     }
   } else {
     // Scheduled
@@ -333,10 +360,10 @@ bot.command("confirm_snipe", async (ctx) => {
 
     await ctx.reply(
       `⏰ <b>Scheduled!</b>\n\n` +
-      `Will fire at: ${esc(scheduledTime.toISOString())}\n` +
-      `Waiting: ${Math.ceil(waitMs / 1000)}s\n` +
-      `Use /cancel to abort before it fires.`,
-      { parse_mode: "HTML" }
+        `Will fire at: ${esc(scheduledTime.toISOString())}\n` +
+        `Waiting: ${Math.ceil(waitMs / 1000)}s\n` +
+        `Use /cancel to abort before it fires.`,
+      { parse_mode: "HTML" },
     );
 
     const timeoutId = setTimeout(async () => {
@@ -350,7 +377,7 @@ bot.command("confirm_snipe", async (ctx) => {
           maxTip,
           250_000,
           BigInt(chain?.chainId || DEFAULT_CHAIN.chainId),
-          (log) => sess.logs.push(log)
+          (log) => sess.logs.push(log),
         );
 
         activeSnipe.txHashes = results.map((r) => r.txHash);
@@ -358,7 +385,12 @@ bot.command("confirm_snipe", async (ctx) => {
 
         if (ctx.chat) {
           const resultLines = results.map((r) => {
-            const icon = r.status === "confirmed" ? "✅" : r.status === "failed" ? "❌" : "⏳";
+            const icon =
+              r.status === "confirmed"
+                ? "✅"
+                : r.status === "failed"
+                  ? "❌"
+                  : "⏳";
             const addr = r.address.slice(0, 10) + "...";
             return `${icon} ${code(addr)} — ${link("TX", r.explorerUrl)}`;
           });
@@ -366,7 +398,7 @@ bot.command("confirm_snipe", async (ctx) => {
           await ctx.api.sendMessage(
             ctx.chat.id,
             `🚀 <b>Scheduled Snipe Fired!</b>\n\n` + resultLines.join("\n"),
-            { parse_mode: "HTML" }
+            { parse_mode: "HTML" },
           );
         }
       } catch (err: any) {
@@ -375,7 +407,7 @@ bot.command("confirm_snipe", async (ctx) => {
           await ctx.api.sendMessage(
             ctx.chat.id,
             `❌ <b>Scheduled snipe failed:</b> ${esc(err.message)}`,
-            { parse_mode: "HTML" }
+            { parse_mode: "HTML" },
           );
         }
       }
@@ -411,25 +443,30 @@ bot.command("set_chain", async (ctx) => {
   if (!chatId) return;
 
   const chainList = CHAINS.map(
-    (c) => `🔹 ${esc(c.key)} — ${esc(c.name)} (ID: ${c.chainId})`
+    (c) => `🔹 ${esc(c.key)} — ${esc(c.name)} (ID: ${c.chainId})`,
   ).join("\n");
 
   await ctx.reply(
     `📡 <b>Available Networks:</b>\n\n` +
-    chainList + "\n\n" +
-    `Send the chain key (e.g., ${code("robinhood")})`,
-    { parse_mode: "HTML" }
+      chainList +
+      "\n\n" +
+      `Send the chain key (e.g., ${code("robinhood")})`,
+    { parse_mode: "HTML" },
   );
 
   registerPendingHandler(chatId, async (msgCtx, _next) => {
     if (!msgCtx.message?.text) return;
     const chain = resolveChain(msgCtx.message.text.trim());
     if (!chain) {
-      await msgCtx.reply("❌ Unknown chain. Use /set_chain to see available options.");
+      await msgCtx.reply(
+        "❌ Unknown chain. Use /set_chain to see available options.",
+      );
       return;
     }
     ctx.session.settings.activeChain = chain.key;
-    await msgCtx.reply(`✅ Network set to <b>${esc(chain.name)}</b>`, { parse_mode: "HTML" });
+    await msgCtx.reply(`✅ Network set to <b>${esc(chain.name)}</b>`, {
+      parse_mode: "HTML",
+    });
   });
 });
 
@@ -440,8 +477,8 @@ bot.command("set_rpc", async (ctx) => {
 
   await ctx.reply(
     `🔗 <b>Set Custom RPC URL</b>\n\n` +
-    `Send a full RPC URL, or ${code("default")} to use the chain default.`,
-    { parse_mode: "HTML" }
+      `Send a full RPC URL, or ${code("default")} to use the chain default.`,
+    { parse_mode: "HTML" },
   );
 
   registerPendingHandler(chatId, async (msgCtx, _next) => {
@@ -454,9 +491,12 @@ bot.command("set_rpc", async (ctx) => {
       try {
         new URL(rpc);
         ctx.session.settings.customRpc = rpc;
-        await msgCtx.reply(`✅ Custom RPC set: ${code(rpc.slice(0, 50) + "...")}`, {
-          parse_mode: "HTML",
-        });
+        await msgCtx.reply(
+          `✅ Custom RPC set: ${code(rpc.slice(0, 50) + "...")}`,
+          {
+            parse_mode: "HTML",
+          },
+        );
       } catch {
         await msgCtx.reply("❌ Invalid URL. Please send a valid RPC endpoint.");
       }
@@ -512,37 +552,50 @@ bot.command("status", async (ctx) => {
   const sess = ctx.session;
 
   const activeSnipes = sess.activeSnipes.filter(
-    (s) => s.status === "pending" || s.status === "waiting" || s.status === "firing"
+    (s) =>
+      s.status === "pending" || s.status === "waiting" || s.status === "firing",
   );
 
   const snipeLines =
     activeSnipes.length === 0
       ? "  No active snipes."
-      : activeSnipes.map((s) => {
-          const countdown =
-            s.scheduledTime && s.status === "waiting"
-              ? ` ⏳ ${Math.max(0, Math.ceil((s.scheduledTime.getTime() - Date.now()) / 1000))}s left`
-              : "";
-          return `  • ${esc(s.contractAddress.slice(0, 10) + "...")} | Qty: ${s.quantity} | ${esc(s.status)}${countdown}`;
-        }).join("\n");
+      : activeSnipes
+          .map((s) => {
+            const countdown =
+              s.scheduledTime && s.status === "waiting"
+                ? ` ⏳ ${Math.max(0, Math.ceil((s.scheduledTime.getTime() - Date.now()) / 1000))}s left`
+                : "";
+            return `  • ${esc(s.contractAddress.slice(0, 10) + "...")} | Qty: ${s.quantity} | ${esc(s.status)}${countdown}`;
+          })
+          .join("\n");
 
   const recentLogs = sess.logs.slice(-10);
   const logLines =
     recentLogs.length === 0
       ? "  No recent activity."
-      : recentLogs.map((l) => {
-          const icon =
-            l.type === "success" ? "✅" : l.type === "error" ? "❌" : l.type === "warning" ? "⚠️" : "ℹ️";
-          const time = l.timestamp.toLocaleTimeString();
-          return `  ${icon} [${esc(time)}] ${esc(l.message)}`;
-        }).join("\n");
+      : recentLogs
+          .map((l) => {
+            const icon =
+              l.type === "success"
+                ? "✅"
+                : l.type === "error"
+                  ? "❌"
+                  : l.type === "warning"
+                    ? "⚠️"
+                    : "ℹ️";
+            const time = l.timestamp.toLocaleTimeString();
+            return `  ${icon} [${esc(time)}] ${esc(l.message)}`;
+          })
+          .join("\n");
 
   const text =
     `📊 <b>Status Dashboard</b>\n\n` +
     `<b>Active Snipes (${activeSnipes.length}):</b>\n` +
-    snipeLines + "\n\n" +
+    snipeLines +
+    "\n\n" +
     `<b>Recent Activity:</b>\n` +
-    logLines + "\n\n" +
+    logLines +
+    "\n\n" +
     `Total snipes completed: ${sess.activeSnipes.filter((s) => s.status === "completed").length}`;
 
   await ctx.reply(text, { parse_mode: "HTML" });
@@ -557,7 +610,7 @@ bot.command("cancel", async (ctx) => {
   }
 
   const pending = sess.activeSnipes.filter(
-    (s) => s.status === "pending" || s.status === "waiting"
+    (s) => s.status === "pending" || s.status === "waiting",
   );
 
   if (pending.length === 0) {
@@ -600,7 +653,9 @@ bot.on("message:text", async (ctx) => {
   switch (wizard.step) {
     case 1: {
       if (!isAddress(text)) {
-        await ctx.reply("❌ Invalid address. Send a valid 0x contract address.");
+        await ctx.reply(
+          "❌ Invalid address. Send a valid 0x contract address.",
+        );
         return;
       }
       wizard.contractAddress = text;
@@ -618,21 +673,21 @@ bot.on("message:text", async (ctx) => {
       if (drop) {
         await ctx.reply(
           `✅ <b>SeaDrop Public Drop Found!</b>\n\n` +
-          `Price: ${code(formatEther(drop.mintPrice) + " ETH")}\n` +
-          `Max per wallet: ${drop.maxTotalMintableByWallet}\n` +
-          `Starts: ${code(new Date(drop.startTime * 1000).toISOString())}\n` +
-          `Ends: ${code(new Date(drop.endTime * 1000).toISOString())}\n` +
-          `Fee BPS: ${drop.feeBps}\n\n` +
-          `Step 2/6: <b>Mint Quantity</b>\n` +
-          `How many NFTs per wallet? (1–${drop.maxTotalMintableByWallet})`,
-          { parse_mode: "HTML" }
+            `Price: ${code(formatEther(drop.mintPrice) + " ETH")}\n` +
+            `Max per wallet: ${drop.maxTotalMintableByWallet}\n` +
+            `Starts: ${code(new Date(drop.startTime * 1000).toISOString())}\n` +
+            `Ends: ${code(new Date(drop.endTime * 1000).toISOString())}\n` +
+            `Fee BPS: ${drop.feeBps}\n\n` +
+            `Step 2/6: <b>Mint Quantity</b>\n` +
+            `How many NFTs per wallet? (1–${drop.maxTotalMintableByWallet})`,
+          { parse_mode: "HTML" },
         );
       } else {
         await ctx.reply(
           `⚠️ Could not fetch drop info (may not be SeaDrop or network issue).\n\n` +
-          `Step 2/6: <b>Mint Quantity</b>\n` +
-          `How many NFTs per wallet?`,
-          { parse_mode: "HTML" }
+            `Step 2/6: <b>Mint Quantity</b>\n` +
+            `How many NFTs per wallet?`,
+          { parse_mode: "HTML" },
         );
       }
       break;
@@ -649,19 +704,22 @@ bot.on("message:text", async (ctx) => {
 
       await ctx.reply(
         `Step 3/6: <b>Max Fee Per Gas (ceiling)</b>\n\n` +
-        `Max gas price you'll tolerate.\n` +
-        `Recommended: ${esc(sess.settings.maxFeePerGas)} Gwei\n\n` +
-        `Send a value in Gwei, or send ${code("default")} to use the current setting.`,
-        { parse_mode: "HTML" }
+          `Max gas price you'll tolerate.\n` +
+          `Recommended: ${esc(sess.settings.maxFeePerGas)} Gwei\n\n` +
+          `Send a value in Gwei, or send ${code("default")} to use the current setting.`,
+        { parse_mode: "HTML" },
       );
       break;
     }
 
     case 3: {
-      const fee = text.toLowerCase() === "default" ? sess.settings.maxFeePerGas : text;
+      const fee =
+        text.toLowerCase() === "default" ? sess.settings.maxFeePerGas : text;
       const parsed = parseFloat(fee);
       if (isNaN(parsed) || parsed <= 0) {
-        await ctx.reply("❌ Enter a valid gas price in Gwei, or send 'default'.");
+        await ctx.reply(
+          "❌ Enter a valid gas price in Gwei, or send 'default'.",
+        );
         return;
       }
       wizard.maxFeePerGas = fee;
@@ -669,16 +727,17 @@ bot.on("message:text", async (ctx) => {
 
       await ctx.reply(
         `Step 4/6: <b>Priority Fee (tip)</b>\n\n` +
-        `Paid to block producers for faster inclusion.\n` +
-        `Recommended: ${esc(sess.settings.maxPriorityFee)} Gwei\n\n` +
-        `Send a value in Gwei, or send ${code("default")} to use the current setting.`,
-        { parse_mode: "HTML" }
+          `Paid to block producers for faster inclusion.\n` +
+          `Recommended: ${esc(sess.settings.maxPriorityFee)} Gwei\n\n` +
+          `Send a value in Gwei, or send ${code("default")} to use the current setting.`,
+        { parse_mode: "HTML" },
       );
       break;
     }
 
     case 4: {
-      const tip = text.toLowerCase() === "default" ? sess.settings.maxPriorityFee : text;
+      const tip =
+        text.toLowerCase() === "default" ? sess.settings.maxPriorityFee : text;
       const parsed = parseFloat(tip);
       if (isNaN(parsed) || parsed <= 0) {
         await ctx.reply("❌ Enter a valid tip in Gwei, or send 'default'.");
@@ -689,8 +748,8 @@ bot.on("message:text", async (ctx) => {
 
       await ctx.reply(
         `Step 5/6: <b>Timing Mode</b>\n\n` +
-        `Send ${code("now")} to fire immediately, or ${code("scheduled")} to wait for a specific time.`,
-        { parse_mode: "HTML" }
+          `Send ${code("now")} to fire immediately, or ${code("scheduled")} to wait for a specific time.`,
+        { parse_mode: "HTML" },
       );
       break;
     }
@@ -704,12 +763,14 @@ bot.on("message:text", async (ctx) => {
         wizard.step = 51;
         await ctx.reply(
           `⏰ <b>Scheduled Mint Time</b>\n\n` +
-          `Send the mint time in ISO format or Unix timestamp.\n` +
-          `Example: ${code("2025-01-15T18:00:00Z")}`,
-          { parse_mode: "HTML" }
+            `Send the mint time in ISO format or Unix timestamp.\n` +
+            `Example: ${code("2025-01-15T18:00:00Z")}`,
+          { parse_mode: "HTML" },
         );
       } else {
-        await ctx.reply("Please send 'now' or 'scheduled'.", { parse_mode: "HTML" });
+        await ctx.reply("Please send 'now' or 'scheduled'.", {
+          parse_mode: "HTML",
+        });
       }
       break;
     }
@@ -725,7 +786,9 @@ bot.on("message:text", async (ctx) => {
       }
 
       if (isNaN(scheduledDate.getTime())) {
-        await ctx.reply("❌ Invalid time. Try ISO format like '2025-01-15T18:00:00Z'");
+        await ctx.reply(
+          "❌ Invalid time. Try ISO format like '2025-01-15T18:00:00Z'",
+        );
         return;
       }
 
@@ -751,9 +814,10 @@ async function showSnipeSummary(ctx: Context, sess: UserSession) {
   const wizard = sess.snipeWizard!;
   const chain = resolveChain(sess.settings.activeChain);
 
-  const timingText = wizard.timingMode === "now"
-    ? "🚀 Fire Now"
-    : `⏰ Scheduled: ${wizard.scheduledTime}`;
+  const timingText =
+    wizard.timingMode === "now"
+      ? "🚀 Fire Now"
+      : `⏰ Scheduled: ${wizard.scheduledTime}`;
 
   const text =
     `📋 <b>Snipe Summary</b>\n\n` +

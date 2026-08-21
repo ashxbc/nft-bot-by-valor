@@ -2,7 +2,12 @@
 // Keys are stored in memory only, never on disk, and encrypted with
 // a per-session AES key derived from the bot's session encryption key.
 
-import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  randomBytes,
+  scryptSync,
+} from "crypto";
 
 const ALGORITHM = "aes-256-gcm";
 const SALT = "seadrop-sniper-bot-v1";
@@ -87,7 +92,13 @@ export interface ActiveSnipe {
   maxPriorityFee: string;
   timingMode: "now" | "scheduled";
   scheduledTime?: Date;
-  status: "pending" | "waiting" | "firing" | "completed" | "failed" | "cancelled";
+  status:
+    | "pending"
+    | "waiting"
+    | "firing"
+    | "completed"
+    | "failed"
+    | "cancelled";
   txHashes: string[];
   startedAt: Date;
   abortController?: AbortController;

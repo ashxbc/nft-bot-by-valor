@@ -38,7 +38,7 @@ export interface MintPlan {
 
 export async function fetchPublicDrop(
   rpcUrl: string,
-  nftContract: string
+  nftContract: string,
 ): Promise<PublicDrop | null> {
   const provider = new JsonRpcProvider(rpcUrl);
   const seadrop = new Contract(SEADROP_ADDRESS, PUBLIC_ABI, provider);
@@ -55,7 +55,11 @@ export async function fetchPublicDrop(
     };
 
     // Unset mapping entry decodes to all zeros
-    if (drop.startTime === 0 && drop.endTime === 0 && drop.maxTotalMintableByWallet === 0) {
+    if (
+      drop.startTime === 0 &&
+      drop.endTime === 0 &&
+      drop.maxTotalMintableByWallet === 0
+    ) {
       return null;
     }
     return drop;
@@ -67,7 +71,7 @@ export async function fetchPublicDrop(
 export async function resolveFeeRecipient(
   rpcUrl: string,
   nftContract: string,
-  restricted: boolean
+  restricted: boolean,
 ): Promise<{ address: string; source: string } | null> {
   const provider = new JsonRpcProvider(rpcUrl);
   const seadrop = new Contract(SEADROP_ADDRESS, PUBLIC_ABI, provider);
@@ -87,13 +91,16 @@ export async function resolveFeeRecipient(
     return null;
   }
 
-  return { address: OPENSEA_FEE_RECIPIENT, source: "OpenSea default (drop does not restrict)" };
+  return {
+    address: OPENSEA_FEE_RECIPIENT,
+    source: "OpenSea default (drop does not restrict)",
+  };
 }
 
 export function encodeMintPublic(
   nftContract: string,
   feeRecipient: string,
-  quantity: number
+  quantity: number,
 ): string {
   return IFACE.encodeFunctionData("mintPublic", [
     nftContract,
@@ -106,12 +113,16 @@ export function encodeMintPublic(
 export async function buildMintPlan(
   rpcUrl: string,
   nftContract: string,
-  quantity: number
+  quantity: number,
 ): Promise<MintPlan | null> {
   const drop = await fetchPublicDrop(rpcUrl, nftContract);
   if (!drop) return null;
 
-  const fee = await resolveFeeRecipient(rpcUrl, nftContract, drop.restrictFeeRecipients);
+  const fee = await resolveFeeRecipient(
+    rpcUrl,
+    nftContract,
+    drop.restrictFeeRecipients,
+  );
   if (!fee) return null;
 
   return {
