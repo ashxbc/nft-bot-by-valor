@@ -28,7 +28,7 @@ export function link(label: string, url: string): string {
 
 /** Safely mask an Alchemy/RPC URL to protect API keys in chat */
 export function maskRpcUrl(url: string): string {
-  if (!url) return "⚠️ None (using public fallback)";
+  if (!url) return "⚠️ Not configured";
   try {
     const parsed = new URL(url);
     const pathname = parsed.pathname;
@@ -174,7 +174,7 @@ export function renderStartText(sess: UserSession): string {
 
   const rpcDisplay = hasRpc
     ? `🔗 <b>Alchemy RPC:</b> ${code(maskRpcUrl(sess.settings.customRpc))}`
-    : `🔗 <b>RPC:</b> ⚠️ <i>None set (using fallback ${code(chain?.rpc.public[0] || "N/A")})</i>`;
+    : `🔗 <b>Alchemy RPC:</b> ⚠️ <i>Not configured (Required)</i>`;
 
   const walletLines =
     walletCount === 0
@@ -223,7 +223,7 @@ export function renderSettingsText(sess: UserSession): string {
   const chain = resolveChain(sess.settings.activeChain);
   const rpcStatus = sess.settings.customRpc
     ? `✅ ${code(maskRpcUrl(sess.settings.customRpc))}`
-    : `⚠️ <i>Not configured (fallback: ${code(chain?.rpc.public[0] || "N/A")})</i>`;
+    : `⚠️ <i>Not configured — click below to set your Alchemy RPC</i>`;
 
   return (
     `⚙️ <b>Bot Settings</b>\n\n` +

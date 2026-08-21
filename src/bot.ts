@@ -348,7 +348,7 @@ bot.callbackQuery("menu_settings", async (ctx) => {
 // Settings: Reset RPC to Default
 bot.callbackQuery("reset_rpc_action", async (ctx) => {
   ctx.session.settings.customRpc = "";
-  await ctx.answerCallbackQuery({ text: "RPC reset to default fallback" });
+  await ctx.answerCallbackQuery({ text: "Custom RPC removed" });
   const text = renderSettingsText(ctx.session);
   try {
     await ctx.editMessageText(text, {
@@ -814,7 +814,7 @@ async function showSnipeSummary(ctx: Context, sess: UserSession) {
 
   const rpcDisplay = sess.settings.customRpc
     ? `Alchemy Dedicated (${maskRpcUrl(sess.settings.customRpc)})`
-    : `⚠️ Public Fallback (${chain?.rpc.public[0] || "N/A"})`;
+    : `⚠️ Not configured (Set via /set_rpc)`;
 
   const text =
     `📋 <b>Snipe Configuration Summary</b>\n\n` +
@@ -1032,7 +1032,7 @@ async function promptSetRpc(ctx: Context & SessionFlavor<UserSession>) {
       `   <i>Example:</i> <code>https://arb-sepolia.g.alchemy.com/v2/your-api-key</code>\n` +
       `   <i>Example:</i> <code>https://eth-mainnet.g.alchemy.com/v2/your-api-key</code>\n\n` +
       `👉 <b>Send your Alchemy HTTPS RPC URL now:</b>\n` +
-      `(Send <code>default</code> to reset to chain fallback, or /cancel to abort)`,
+      `(Send <code>clear</code> to remove custom RPC, or /cancel to abort)`,
     {
       parse_mode: "HTML",
       link_preview_options: { is_disabled: true },
@@ -1050,9 +1050,9 @@ async function promptSetRpc(ctx: Context & SessionFlavor<UserSession>) {
       return;
     }
 
-    if (input.toLowerCase() === "default") {
+    if (input.toLowerCase() === "default" || input.toLowerCase() === "clear") {
       ctx.session.settings.customRpc = "";
-      await msgCtx.reply("✅ RPC reset to chain fallback default.", {
+      await msgCtx.reply("✅ Custom RPC cleared.", {
         reply_markup: getSettingsKeyboard(ctx.session),
       });
       return;

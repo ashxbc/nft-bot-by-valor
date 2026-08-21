@@ -78,10 +78,8 @@ npm run dev
 | `/snipe`         | Start the 6-step interactive mint snipe wizard                                         |
 | `/confirm_snipe` | Fire or schedule the configured snipe                                                  |
 | `/settings`      | Configure RPCs, gas caps, and network                                                  |
-| `/set_rpc`       | Set or update your personal Alchemy RPC endpoint                                       |
 | `/status`        | View active snipes, countdowns, and execution logs                                     |
 | `/cancel`        | Cancel pending or scheduled snipes                                                     |
-| `/help`          | Display usage guide and command reference                                              |
 
 ---
 
