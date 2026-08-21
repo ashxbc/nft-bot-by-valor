@@ -9,7 +9,7 @@
 import "dotenv/config";
 import express from "express";
 import { webhookCallback } from "grammy";
-import { bot } from "../src/bot";
+import { bot, registerBotCommands } from "../src/bot";
 
 const app = express();
 app.use(express.json());
@@ -54,6 +54,7 @@ app.get("/api/register", async (req, res) => {
     }
 
     const result = await bot.api.setWebhook(webhookUrl, setWebhookOpts);
+    await registerBotCommands().catch(console.error);
 
     res.json({
       ok: result,

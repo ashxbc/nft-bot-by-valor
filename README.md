@@ -78,6 +78,7 @@ npm run dev
 | `/settings` | Configure RPCs, gas caps, and network |
 | `/status` | View active snipes, countdowns, and execution logs |
 | `/cancel` | Cancel pending or scheduled snipes |
+| `/help` | Display usage guide and command reference |
 
 ---
 

@@ -20,7 +20,27 @@ import {
 } from "./session";
 import { buildMintPlan, fetchPublicDrop } from "./seadrop";
 import { executeSnipe, resolveRpcUrls } from "./mint";
-import { CHAINS, DEFAULT_CHAIN, resolveChain } from "./chains";
+import { DEFAULT_CHAIN, resolveChain } from "./chains";
+import {
+  BOT_COMMANDS,
+  esc,
+  code,
+  link,
+  getMainMenuKeyboard,
+  getWalletsKeyboard,
+  getSettingsKeyboard,
+  getStatusKeyboard,
+  getHelpKeyboard,
+  getSnipeTimingKeyboard,
+  getSnipeConfirmKeyboard,
+  getChainSelectionKeyboard,
+  getClearWalletsConfirmKeyboard,
+  renderStartText,
+  renderWalletsText,
+  renderSettingsText,
+  renderStatusText,
+  renderHelpText,
+} from "./menu";
 
 type BotContext = Context & SessionFlavor<UserSession>;
 
@@ -35,20 +55,17 @@ if (!BOT_TOKEN) {
 const bot = new Bot<BotContext>(BOT_TOKEN);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HELPERS
+// TELEGRAM COMMAND MENU REGISTRATION
 // ─────────────────────────────────────────────────────────────────────────────
-
-/** Escape text for Telegram HTML parse mode */
-function esc(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-function code(s: string): string {
-  return `<code>${esc(s)}</code>`;
-}
-
-function link(label: string, url: string): string {
-  return `<a href="${url}">${esc(label)}</a>`;
+export async function registerBotCommands(): Promise<boolean> {
+  try {
+    await bot.api.setMyCommands(BOT_COMMANDS);
+    console.log("✅ Telegram bot command menu registered successfully.");
+    return true;
+  } catch (err: any) {
+    console.error("⚠️ Failed to register bot commands:", err.message);
+    return false;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -98,544 +115,362 @@ bot.on("message", async (ctx, next) => {
 
 // /start — Main dashboard
 bot.command("start", async (ctx) => {
-  const sess = ctx.session;
-  const chain = resolveChain(sess.settings.activeChain);
-  const walletCount = sess.walletAddresses.length;
-  const activeSnipes = sess.activeSnipes.filter(
-    (s) => s.status === "pending" || s.status === "waiting",
-  ).length;
-
-  const walletLines =
-    walletCount === 0
-      ? "⚠️ No wallets loaded. Use /wallets to add one."
-      : `✅ ${walletCount} wallet(s) ready:\n` +
-        sess.walletAddresses
-          .map(
-            (addr, i) =>
-              `  ${i + 1}. ${code(addr.slice(0, 10) + "..." + addr.slice(-8))}`,
-          )
-          .join("\n");
-
-  const rpcDisplay = sess.settings.customRpc
-    ? "🔗 Custom: " + code(sess.settings.customRpc.slice(0, 40) + "...")
-    : "🔗 Default: " + code(chain?.rpc.public[0] || "N/A");
-
-  const text =
-    `🔫 <b>SeaDrop NFT Sniper Bot</b>\n\n` +
-    `📡 <b>Network:</b> ${esc(chain?.name || "Robinhood Chain")} (Chain ID: ${chain?.chainId || 4663})\n` +
-    `${rpcDisplay}\n\n` +
-    `💰 <b>Gas Settings:</b>\n` +
-    `  Max Fee: ${esc(sess.settings.maxFeePerGas)} Gwei\n` +
-    `  Priority Fee: ${esc(sess.settings.maxPriorityFee)} Gwei\n` +
-    `  Safety Cap: ${sess.settings.gasSafetyCap ? "ON" : "OFF"}\n\n` +
-    `👤 <b>Wallets:</b>\n  ${walletLines.replace(/\n/g, "\n  ")}\n\n` +
-    `🎯 <b>Active Snipes:</b> ${activeSnipes}\n\n` +
-    `<b>Commands:</b>\n` +
-    `/snipe — Start a new mint snipe\n` +
-    `/wallets — Manage wallets\n` +
-    `/settings — Adjust settings\n` +
-    `/status — View logs and active tasks\n` +
-    `/cancel — Abort pending tasks`;
-
+  const text = renderStartText(ctx.session);
   await ctx.reply(text, {
     parse_mode: "HTML",
+    reply_markup: getMainMenuKeyboard(),
     link_preview_options: { is_disabled: true },
+  });
+});
+
+// /help — Help & documentation
+bot.command("help", async (ctx) => {
+  const text = renderHelpText();
+  await ctx.reply(text, {
+    parse_mode: "HTML",
+    reply_markup: getHelpKeyboard(),
   });
 });
 
 // /wallets — Wallet manager menu
 bot.command("wallets", async (ctx) => {
   const sess = ctx.session;
-
-  const text =
-    `👤 <b>Wallet Manager</b>\n\n` +
-    `Currently loaded: ${sess.walletAddresses.length} wallet(s)\n\n` +
-    `<b>Actions:</b>\n` +
-    `/wallets_add — Add a private key\n` +
-    `/wallets_view — View wallet addresses\n` +
-    `/wallets_clear — Clear all wallets`;
-
-  await ctx.reply(text, { parse_mode: "HTML" });
+  const text = renderWalletsText(sess);
+  await ctx.reply(text, {
+    parse_mode: "HTML",
+    reply_markup: getWalletsKeyboard(sess.walletAddresses.length > 0),
+  });
 });
 
 // /wallets_add — Add a private key
 bot.command("wallets_add", async (ctx) => {
-  const chatId = ctx.chat?.id;
-  if (!chatId) return;
-
-  await ctx.reply(
-    `🔑 <b>Send me a private key to add.</b>\n\n` +
-      `The key is encrypted in memory and never saved to disk.\n` +
-      `Send /cancel_w to abort.`,
-    { parse_mode: "HTML" },
-  );
-
-  registerPendingHandler(chatId, async (msgCtx, _next) => {
-    if (!msgCtx.message?.text) return;
-
-    if (msgCtx.message.text === "/cancel_w") {
-      await msgCtx.reply("❌ Cancelled.");
-      return;
-    }
-
-    const key = msgCtx.message.text.trim();
-
-    try {
-      const wallet = new Wallet(key);
-      const encrypted = encryptWallet(key);
-
-      ctx.session.wallets.push(encrypted);
-      ctx.session.walletAddresses.push(wallet.address);
-
-      await msgCtx.reply(
-        `✅ <b>Wallet added!</b>\n\nAddress: ${code(wallet.address)}`,
-        { parse_mode: "HTML" },
-      );
-    } catch (err: any) {
-      await msgCtx.reply(
-        `❌ <b>Invalid private key:</b> ${esc(err.message || "Could not parse key")}`,
-      );
-    }
-  });
+  await promptAddWallet(ctx);
 });
 
 // /wallets_view — View balances
 bot.command("wallets_view", async (ctx) => {
-  const sess = ctx.session;
-
-  if (sess.walletAddresses.length === 0) {
-    await ctx.reply("⚠️ No wallets loaded. Use /wallets_add to add one.");
-    return;
-  }
-
-  const chain = resolveChain(sess.settings.activeChain);
-  const rpc = sess.settings.customRpc || chain?.rpc.public[0];
-  if (!rpc) {
-    await ctx.reply("⚠️ No RPC configured to fetch balances.");
-    return;
-  }
-
-  const provider = new JsonRpcProvider(rpc);
-
-  const lines = await Promise.all(
-    sess.walletAddresses.map(async (addr, i) => {
-      try {
-        const balance = await provider.getBalance(addr);
-        return `${i + 1}. ${code(addr)}\n   💰 ${formatEther(balance)} ETH`;
-      } catch {
-        return `${i + 1}. ${code(addr)}\n   💰 Balance: unknown`;
-      }
-    }),
-  );
-
-  await ctx.reply(
-    `👤 <b>Your Wallets (${sess.walletAddresses.length}):</b>\n\n` +
-      lines.join("\n\n"),
-    { parse_mode: "HTML" },
-  );
+  await displayWalletBalances(ctx);
 });
 
 // /wallets_clear — Clear all wallets
 bot.command("wallets_clear", async (ctx) => {
   ctx.session.wallets = [];
   ctx.session.walletAddresses = [];
-  await ctx.reply("🗑️ All wallets cleared from memory.");
+  await ctx.reply("🗑️ All wallets cleared from memory.", {
+    reply_markup: getWalletsKeyboard(false),
+  });
 });
 
 // /snipe — Start the wizard
 bot.command("snipe", async (ctx) => {
-  const sess = ctx.session;
-
-  if (sess.walletAddresses.length === 0) {
-    await ctx.reply("⚠️ Add wallets first with /wallets_add before sniping.");
-    return;
-  }
-
-  sess.snipeWizard = { step: 1 };
-  await ctx.reply(
-    `🎯 <b>SeaDrop Snipe Wizard</b>\n\n` +
-      `Step 1/6: <b>Contract Address</b>\n` +
-      `Send the NFT contract address (0x...).`,
-    { parse_mode: "HTML" },
-  );
+  await startSnipeWizard(ctx);
 });
 
 // /confirm_snipe — Execute the snipe
 bot.command("confirm_snipe", async (ctx) => {
-  const sess = ctx.session;
-  const wizard = sess.snipeWizard;
-
-  if (!wizard || wizard.step !== 6 || !wizard.contractAddress) {
-    await ctx.reply("⚠️ No snipe to confirm. Use /snipe to start.");
-    return;
-  }
-
-  const chain = resolveChain(sess.settings.activeChain);
-  const rpcUrls = resolveRpcUrls(
-    sess.settings.customRpc,
-    process.env.ADDITIONAL_RPC_URLS || "",
-  );
-
-  await ctx.reply("🔍 Building mint plan from on-chain data...");
-
-  const plan = await buildMintPlan(
-    rpcUrls[0],
-    wizard.contractAddress,
-    wizard.quantity!,
-  );
-  if (!plan) {
-    await ctx.reply(
-      "❌ Could not build mint plan. Contract may not be a SeaDrop collection.",
-    );
-    sess.snipeWizard = undefined;
-    return;
-  }
-
-  const maxFee = parseUnits(wizard.maxFeePerGas!, "gwei");
-  const maxTip = parseUnits(wizard.maxPriorityFee!, "gwei");
-
-  const snipeId = `snipe_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const activeSnipe: ActiveSnipe = {
-    id: snipeId,
-    contractAddress: wizard.contractAddress,
-    quantity: wizard.quantity!,
-    maxFeePerGas: wizard.maxFeePerGas!,
-    maxPriorityFee: wizard.maxPriorityFee!,
-    timingMode: wizard.timingMode!,
-    scheduledTime: wizard.scheduledTime
-      ? new Date(wizard.scheduledTime)
-      : undefined,
-    status: wizard.timingMode === "now" ? "firing" : "waiting",
-    txHashes: [],
-    startedAt: new Date(),
-  };
-
-  sess.activeSnipes.push(activeSnipe);
-  sess.snipeWizard = undefined;
-
-  if (wizard.timingMode === "now") {
-    await ctx.reply("🚀 <b>Firing immediately...</b>", { parse_mode: "HTML" });
-
-    try {
-      const results = await executeSnipe(
-        sess.wallets.map((w) => decryptWallet(w)),
-        plan,
-        rpcUrls,
-        maxFee,
-        maxTip,
-        250_000,
-        BigInt(chain?.chainId || DEFAULT_CHAIN.chainId),
-        (log) => sess.logs.push(log),
-      );
-
-      activeSnipe.txHashes = results.map((r) => r.txHash);
-      activeSnipe.status = "completed";
-
-      const resultLines = results.map((r) => {
-        const icon =
-          r.status === "confirmed" ? "✅" : r.status === "failed" ? "❌" : "⏳";
-        const addr = r.address.slice(0, 10) + "..." + r.address.slice(-6);
-        const txLabel = r.txHash.slice(0, 16) + "...";
-        let line = `${icon} ${code(addr)}\n  TX: ${link(txLabel, r.explorerUrl)}`;
-        if (r.blockNumber) {
-          line += `\n  Block: ${r.blockNumber} | Gas: ${r.gasUsed}`;
-        }
-        return line;
-      });
-
-      await ctx.reply(
-        `📊 <b>Snipe Results</b>\n\n` + resultLines.join("\n\n"),
-        { parse_mode: "HTML", link_preview_options: { is_disabled: true } },
-      );
-    } catch (err: any) {
-      activeSnipe.status = "failed";
-      await ctx.reply(`❌ <b>Snipe failed:</b> ${esc(err.message)}`, {
-        parse_mode: "HTML",
-      });
-    }
-  } else {
-    // Scheduled
-    const scheduledTime = new Date(wizard.scheduledTime!);
-    const waitMs = scheduledTime.getTime() - Date.now();
-
-    await ctx.reply(
-      `⏰ <b>Scheduled!</b>\n\n` +
-        `Will fire at: ${esc(scheduledTime.toISOString())}\n` +
-        `Waiting: ${Math.ceil(waitMs / 1000)}s\n` +
-        `Use /cancel to abort before it fires.`,
-      { parse_mode: "HTML" },
-    );
-
-    const timeoutId = setTimeout(async () => {
-      activeSnipe.status = "firing";
-      try {
-        const results = await executeSnipe(
-          sess.wallets.map((w) => decryptWallet(w)),
-          plan,
-          rpcUrls,
-          maxFee,
-          maxTip,
-          250_000,
-          BigInt(chain?.chainId || DEFAULT_CHAIN.chainId),
-          (log) => sess.logs.push(log),
-        );
-
-        activeSnipe.txHashes = results.map((r) => r.txHash);
-        activeSnipe.status = "completed";
-
-        if (ctx.chat) {
-          const resultLines = results.map((r) => {
-            const icon =
-              r.status === "confirmed"
-                ? "✅"
-                : r.status === "failed"
-                  ? "❌"
-                  : "⏳";
-            const addr = r.address.slice(0, 10) + "...";
-            return `${icon} ${code(addr)} — ${link("TX", r.explorerUrl)}`;
-          });
-
-          await ctx.api.sendMessage(
-            ctx.chat.id,
-            `🚀 <b>Scheduled Snipe Fired!</b>\n\n` + resultLines.join("\n"),
-            { parse_mode: "HTML" },
-          );
-        }
-      } catch (err: any) {
-        activeSnipe.status = "failed";
-        if (ctx.chat) {
-          await ctx.api.sendMessage(
-            ctx.chat.id,
-            `❌ <b>Scheduled snipe failed:</b> ${esc(err.message)}`,
-            { parse_mode: "HTML" },
-          );
-        }
-      }
-    }, waitMs);
-
-    (activeSnipe as any)._timeoutId = timeoutId;
-  }
+  await executeConfirmedSnipe(ctx);
 });
 
 // /settings — Settings menu
 bot.command("settings", async (ctx) => {
   const sess = ctx.session;
-  const chain = resolveChain(sess.settings.activeChain);
-
-  const text =
-    `⚙️ <b>Settings</b>\n\n` +
-    `<b>Network:</b> ${esc(chain?.name || "Robinhood Chain")} (${chain?.chainId || 4663})\n` +
-    `/set_chain — Switch network\n\n` +
-    `<b>RPC:</b>\n` +
-    `Current: ${code(sess.settings.customRpc || chain?.rpc.public[0] || "N/A")}\n` +
-    `/set_rpc — Set custom RPC URL\n\n` +
-    `<b>Gas:</b>\n` +
-    `Max Fee: ${esc(sess.settings.maxFeePerGas)} Gwei — /set_maxfee\n` +
-    `Priority Fee: ${esc(sess.settings.maxPriorityFee)} Gwei — /set_priority\n` +
-    `Safety Cap: ${sess.settings.gasSafetyCap ? "ON ✅" : "OFF ❌"} — /toggle_safety`;
-
-  await ctx.reply(text, { parse_mode: "HTML" });
+  const text = renderSettingsText(sess);
+  await ctx.reply(text, {
+    parse_mode: "HTML",
+    reply_markup: getSettingsKeyboard(sess),
+  });
 });
 
 // /set_chain — Switch network
 bot.command("set_chain", async (ctx) => {
-  const chatId = ctx.chat?.id;
-  if (!chatId) return;
-
-  const chainList = CHAINS.map(
-    (c) => `🔹 ${esc(c.key)} — ${esc(c.name)} (ID: ${c.chainId})`,
-  ).join("\n");
-
-  await ctx.reply(
-    `📡 <b>Available Networks:</b>\n\n` +
-      chainList +
-      "\n\n" +
-      `Send the chain key (e.g., ${code("robinhood")})`,
-    { parse_mode: "HTML" },
-  );
-
-  registerPendingHandler(chatId, async (msgCtx, _next) => {
-    if (!msgCtx.message?.text) return;
-    const chain = resolveChain(msgCtx.message.text.trim());
-    if (!chain) {
-      await msgCtx.reply(
-        "❌ Unknown chain. Use /set_chain to see available options.",
-      );
-      return;
-    }
-    ctx.session.settings.activeChain = chain.key;
-    await msgCtx.reply(`✅ Network set to <b>${esc(chain.name)}</b>`, {
-      parse_mode: "HTML",
-    });
-  });
+  await promptSetChain(ctx);
 });
 
 // /set_rpc — Set custom RPC URL
 bot.command("set_rpc", async (ctx) => {
-  const chatId = ctx.chat?.id;
-  if (!chatId) return;
-
-  await ctx.reply(
-    `🔗 <b>Set Custom RPC URL</b>\n\n` +
-      `Send a full RPC URL, or ${code("default")} to use the chain default.`,
-    { parse_mode: "HTML" },
-  );
-
-  registerPendingHandler(chatId, async (msgCtx, _next) => {
-    if (!msgCtx.message?.text) return;
-    const rpc = msgCtx.message.text.trim();
-    if (rpc.toLowerCase() === "default") {
-      ctx.session.settings.customRpc = "";
-      await msgCtx.reply("✅ RPC reset to chain default.");
-    } else {
-      try {
-        new URL(rpc);
-        ctx.session.settings.customRpc = rpc;
-        await msgCtx.reply(
-          `✅ Custom RPC set: ${code(rpc.slice(0, 50) + "...")}`,
-          {
-            parse_mode: "HTML",
-          },
-        );
-      } catch {
-        await msgCtx.reply("❌ Invalid URL. Please send a valid RPC endpoint.");
-      }
-    }
-  });
+  await promptSetRpc(ctx);
 });
 
 // /set_maxfee — Set max fee per gas
 bot.command("set_maxfee", async (ctx) => {
-  const chatId = ctx.chat?.id;
-  if (!chatId) return;
-  await ctx.reply("Send the new max fee per gas in Gwei:");
-
-  registerPendingHandler(chatId, async (msgCtx, _next) => {
-    if (!msgCtx.message?.text) return;
-    const val = parseFloat(msgCtx.message.text.trim());
-    if (isNaN(val) || val <= 0) {
-      await msgCtx.reply("❌ Invalid value. Send a positive number in Gwei.");
-      return;
-    }
-    ctx.session.settings.maxFeePerGas = val.toString();
-    await msgCtx.reply(`✅ Max fee set to ${val} Gwei`);
-  });
+  await promptSetMaxFee(ctx);
 });
 
 // /set_priority — Set priority fee
 bot.command("set_priority", async (ctx) => {
-  const chatId = ctx.chat?.id;
-  if (!chatId) return;
-  await ctx.reply("Send the new priority fee (tip) in Gwei:");
-
-  registerPendingHandler(chatId, async (msgCtx, _next) => {
-    if (!msgCtx.message?.text) return;
-    const val = parseFloat(msgCtx.message.text.trim());
-    if (isNaN(val) || val <= 0) {
-      await msgCtx.reply("❌ Invalid value. Send a positive number in Gwei.");
-      return;
-    }
-    ctx.session.settings.maxPriorityFee = val.toString();
-    await msgCtx.reply(`✅ Priority fee set to ${val} Gwei`);
-  });
+  await promptSetPriority(ctx);
 });
 
 // /toggle_safety — Toggle gas safety cap
 bot.command("toggle_safety", async (ctx) => {
   ctx.session.settings.gasSafetyCap = !ctx.session.settings.gasSafetyCap;
   const state = ctx.session.settings.gasSafetyCap ? "ON ✅" : "OFF ❌";
-  await ctx.reply(`Gas safety cap: <b>${state}</b>`, { parse_mode: "HTML" });
+  await ctx.reply(`Gas safety cap: <b>${state}</b>`, {
+    parse_mode: "HTML",
+    reply_markup: getSettingsKeyboard(ctx.session),
+  });
 });
 
 // /status — View active snipes and logs
 bot.command("status", async (ctx) => {
   const sess = ctx.session;
-
-  const activeSnipes = sess.activeSnipes.filter(
-    (s) =>
-      s.status === "pending" || s.status === "waiting" || s.status === "firing",
-  );
-
-  const snipeLines =
-    activeSnipes.length === 0
-      ? "  No active snipes."
-      : activeSnipes
-          .map((s) => {
-            const countdown =
-              s.scheduledTime && s.status === "waiting"
-                ? ` ⏳ ${Math.max(0, Math.ceil((s.scheduledTime.getTime() - Date.now()) / 1000))}s left`
-                : "";
-            return `  • ${esc(s.contractAddress.slice(0, 10) + "...")} | Qty: ${s.quantity} | ${esc(s.status)}${countdown}`;
-          })
-          .join("\n");
-
-  const recentLogs = sess.logs.slice(-10);
-  const logLines =
-    recentLogs.length === 0
-      ? "  No recent activity."
-      : recentLogs
-          .map((l) => {
-            const icon =
-              l.type === "success"
-                ? "✅"
-                : l.type === "error"
-                  ? "❌"
-                  : l.type === "warning"
-                    ? "⚠️"
-                    : "ℹ️";
-            const time = l.timestamp.toLocaleTimeString();
-            return `  ${icon} [${esc(time)}] ${esc(l.message)}`;
-          })
-          .join("\n");
-
-  const text =
-    `📊 <b>Status Dashboard</b>\n\n` +
-    `<b>Active Snipes (${activeSnipes.length}):</b>\n` +
-    snipeLines +
-    "\n\n" +
-    `<b>Recent Activity:</b>\n` +
-    logLines +
-    "\n\n" +
-    `Total snipes completed: ${sess.activeSnipes.filter((s) => s.status === "completed").length}`;
-
-  await ctx.reply(text, { parse_mode: "HTML" });
+  const text = renderStatusText(sess);
+  await ctx.reply(text, {
+    parse_mode: "HTML",
+    reply_markup: getStatusKeyboard(),
+  });
 });
 
 // /cancel — Abort pending/scheduled tasks
 bot.command("cancel", async (ctx) => {
-  const sess = ctx.session;
-
-  if (sess.snipeWizard) {
-    sess.snipeWizard = undefined;
-  }
-
-  const pending = sess.activeSnipes.filter(
-    (s) => s.status === "pending" || s.status === "waiting",
-  );
-
-  if (pending.length === 0) {
-    await ctx.reply("ℹ️ No active tasks to cancel.");
-    return;
-  }
-
-  for (const snipe of pending) {
-    snipe.status = "cancelled";
-    const timeoutId = (snipe as any)._timeoutId;
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-    sess.logs.push({
-      timestamp: new Date(),
-      message: `Cancelled snipe for ${snipe.contractAddress.slice(0, 10)}...`,
-      type: "warning",
-    });
-  }
-
-  await ctx.reply(`✅ Cancelled ${pending.length} pending task(s).`);
+  await handleCancelTasks(ctx);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 4. WIZARD MESSAGE HANDLER — processes free-text input during snipe wizard
+// 4. INTERACTIVE INLINE CALLBACK QUERY HANDLERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Navigation: Back to / Refresh Start Dashboard
+bot.callbackQuery(["menu_start", "menu_refresh_start"], async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "Dashboard refreshed" });
+  const text = renderStartText(ctx.session);
+  try {
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      reply_markup: getMainMenuKeyboard(),
+      link_preview_options: { is_disabled: true },
+    });
+  } catch {
+    await ctx.reply(text, {
+      parse_mode: "HTML",
+      reply_markup: getMainMenuKeyboard(),
+      link_preview_options: { is_disabled: true },
+    });
+  }
+});
+
+// Navigation: Help
+bot.callbackQuery("menu_help", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const text = renderHelpText();
+  try {
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      reply_markup: getHelpKeyboard(),
+    });
+  } catch {
+    await ctx.reply(text, {
+      parse_mode: "HTML",
+      reply_markup: getHelpKeyboard(),
+    });
+  }
+});
+
+// Navigation: Wallets Menu
+bot.callbackQuery("menu_wallets", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const sess = ctx.session;
+  const text = renderWalletsText(sess);
+  try {
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      reply_markup: getWalletsKeyboard(sess.walletAddresses.length > 0),
+    });
+  } catch {
+    await ctx.reply(text, {
+      parse_mode: "HTML",
+      reply_markup: getWalletsKeyboard(sess.walletAddresses.length > 0),
+    });
+  }
+});
+
+// Wallet: Add
+bot.callbackQuery("wallet_add", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await promptAddWallet(ctx);
+});
+
+// Wallet: View Balances
+bot.callbackQuery("wallet_view", async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "Fetching balances..." });
+  await displayWalletBalances(ctx);
+});
+
+// Wallet: Clear Prompt
+bot.callbackQuery("wallet_clear_prompt", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.reply(
+    "⚠️ <b>Are you sure you want to clear all wallets from memory?</b>",
+    {
+      parse_mode: "HTML",
+      reply_markup: getClearWalletsConfirmKeyboard(),
+    },
+  );
+});
+
+// Wallet: Clear Confirmed
+bot.callbackQuery("wallet_clear_confirmed", async (ctx) => {
+  ctx.session.wallets = [];
+  ctx.session.walletAddresses = [];
+  await ctx.answerCallbackQuery({ text: "All wallets cleared" });
+  await ctx.reply("🗑️ All wallets have been cleared from memory.", {
+    reply_markup: getWalletsKeyboard(false),
+  });
+});
+
+// Navigation: Settings Menu
+bot.callbackQuery("menu_settings", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const sess = ctx.session;
+  const text = renderSettingsText(sess);
+  try {
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      reply_markup: getSettingsKeyboard(sess),
+    });
+  } catch {
+    await ctx.reply(text, {
+      parse_mode: "HTML",
+      reply_markup: getSettingsKeyboard(sess),
+    });
+  }
+});
+
+// Settings: Toggle Safety Cap
+bot.callbackQuery("toggle_safety_action", async (ctx) => {
+  ctx.session.settings.gasSafetyCap = !ctx.session.settings.gasSafetyCap;
+  const state = ctx.session.settings.gasSafetyCap ? "enabled" : "disabled";
+  await ctx.answerCallbackQuery({ text: `Gas safety cap ${state}` });
+
+  const text = renderSettingsText(ctx.session);
+  try {
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      reply_markup: getSettingsKeyboard(ctx.session),
+    });
+  } catch {
+    await ctx.reply(text, {
+      parse_mode: "HTML",
+      reply_markup: getSettingsKeyboard(ctx.session),
+    });
+  }
+});
+
+// Settings: Set Max Fee Prompt
+bot.callbackQuery("set_maxfee_prompt", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await promptSetMaxFee(ctx);
+});
+
+// Settings: Set Priority Fee Prompt
+bot.callbackQuery("set_priority_prompt", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await promptSetPriority(ctx);
+});
+
+// Settings: Set Custom RPC Prompt
+bot.callbackQuery("set_rpc_prompt", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await promptSetRpc(ctx);
+});
+
+// Settings: Set Chain Prompt
+bot.callbackQuery("set_chain_prompt", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.reply("📡 <b>Select a network:</b>", {
+    parse_mode: "HTML",
+    reply_markup: getChainSelectionKeyboard(),
+  });
+});
+
+// Settings: Select Chain Action
+bot.callbackQuery(/^select_chain_(.+)$/, async (ctx) => {
+  const chainKey = ctx.match[1];
+  const chain = resolveChain(chainKey);
+  if (chain) {
+    ctx.session.settings.activeChain = chain.key;
+    await ctx.answerCallbackQuery({ text: `Network switched to ${chain.name}` });
+  } else {
+    await ctx.answerCallbackQuery({ text: "Chain not recognized" });
+  }
+
+  const text = renderSettingsText(ctx.session);
+  try {
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      reply_markup: getSettingsKeyboard(ctx.session),
+    });
+  } catch {
+    await ctx.reply(text, {
+      parse_mode: "HTML",
+      reply_markup: getSettingsKeyboard(ctx.session),
+    });
+  }
+});
+
+// Navigation: Status Dashboard & Refresh
+bot.callbackQuery(["menu_status", "status_refresh"], async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "Status refreshed" });
+  const text = renderStatusText(ctx.session);
+  try {
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      reply_markup: getStatusKeyboard(),
+    });
+  } catch {
+    await ctx.reply(text, {
+      parse_mode: "HTML",
+      reply_markup: getStatusKeyboard(),
+    });
+  }
+});
+
+// Snipe: Start Wizard from button
+bot.callbackQuery("menu_snipe", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await startSnipeWizard(ctx);
+});
+
+// Snipe: Step 5 Timing Selection (Now)
+bot.callbackQuery("snipe_timing_now", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const sess = ctx.session;
+  if (!sess.snipeWizard) return;
+
+  sess.snipeWizard.timingMode = "now";
+  sess.snipeWizard.step = 6;
+  await showSnipeSummary(ctx, sess);
+});
+
+// Snipe: Step 5 Timing Selection (Scheduled)
+bot.callbackQuery("snipe_timing_scheduled", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const sess = ctx.session;
+  if (!sess.snipeWizard) return;
+
+  sess.snipeWizard.step = 51;
+  await ctx.reply(
+    `⏰ <b>Scheduled Mint Time</b>\n\n` +
+      `Send the target mint time in ISO format or Unix timestamp.\n` +
+      `Example: ${code("2026-09-01T18:00:00Z")}`,
+    { parse_mode: "HTML" },
+  );
+});
+
+// Snipe: Confirm Action
+bot.callbackQuery("snipe_confirm_action", async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "Processing snipe..." });
+  await executeConfirmedSnipe(ctx);
+});
+
+// Snipe: Cancel Action
+bot.callbackQuery(["snipe_cancel_action", "menu_cancel"], async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "Cancelled" });
+  await handleCancelTasks(ctx);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. WIZARD MESSAGE HANDLER — processes free-text input during snipe wizard
 // ─────────────────────────────────────────────────────────────────────────────
 bot.on("message:text", async (ctx) => {
   const sess = ctx.session;
@@ -646,16 +481,16 @@ bot.on("message:text", async (ctx) => {
 
   if (text === "/cancel") {
     sess.snipeWizard = undefined;
-    await ctx.reply("❌ Snipe wizard cancelled.");
+    await ctx.reply("❌ Snipe wizard cancelled.", {
+      reply_markup: getMainMenuKeyboard(),
+    });
     return;
   }
 
   switch (wizard.step) {
     case 1: {
       if (!isAddress(text)) {
-        await ctx.reply(
-          "❌ Invalid address. Send a valid 0x contract address.",
-        );
+        await ctx.reply("❌ Invalid address. Send a valid 0x contract address.");
         return;
       }
       wizard.contractAddress = text;
@@ -664,7 +499,9 @@ bot.on("message:text", async (ctx) => {
       const chain = resolveChain(sess.settings.activeChain);
       const rpc = sess.settings.customRpc || chain?.rpc.public[0];
       if (!rpc) {
-        await ctx.reply("❌ No RPC configured. Use /settings first.");
+        await ctx.reply("❌ No RPC configured. Use /settings first.", {
+          reply_markup: getSettingsKeyboard(sess),
+        });
         sess.snipeWizard = undefined;
         return;
       }
@@ -706,7 +543,7 @@ bot.on("message:text", async (ctx) => {
         `Step 3/6: <b>Max Fee Per Gas (ceiling)</b>\n\n` +
           `Max gas price you'll tolerate.\n` +
           `Recommended: ${esc(sess.settings.maxFeePerGas)} Gwei\n\n` +
-          `Send a value in Gwei, or send ${code("default")} to use the current setting.`,
+          `Send a value in Gwei, or send ${code("default")} to use current setting.`,
         { parse_mode: "HTML" },
       );
       break;
@@ -729,7 +566,7 @@ bot.on("message:text", async (ctx) => {
         `Step 4/6: <b>Priority Fee (tip)</b>\n\n` +
           `Paid to block producers for faster inclusion.\n` +
           `Recommended: ${esc(sess.settings.maxPriorityFee)} Gwei\n\n` +
-          `Send a value in Gwei, or send ${code("default")} to use the current setting.`,
+          `Send a value in Gwei, or send ${code("default")} to use current setting.`,
         { parse_mode: "HTML" },
       );
       break;
@@ -737,7 +574,9 @@ bot.on("message:text", async (ctx) => {
 
     case 4: {
       const tip =
-        text.toLowerCase() === "default" ? sess.settings.maxPriorityFee : text;
+        text.toLowerCase() === "default"
+          ? sess.settings.maxPriorityFee
+          : text;
       const parsed = parseFloat(tip);
       if (isNaN(parsed) || parsed <= 0) {
         await ctx.reply("❌ Enter a valid tip in Gwei, or send 'default'.");
@@ -748,8 +587,11 @@ bot.on("message:text", async (ctx) => {
 
       await ctx.reply(
         `Step 5/6: <b>Timing Mode</b>\n\n` +
-          `Send ${code("now")} to fire immediately, or ${code("scheduled")} to wait for a specific time.`,
-        { parse_mode: "HTML" },
+          `Choose when to execute this mint:`,
+        {
+          parse_mode: "HTML",
+          reply_markup: getSnipeTimingKeyboard(),
+        },
       );
       break;
     }
@@ -763,13 +605,14 @@ bot.on("message:text", async (ctx) => {
         wizard.step = 51;
         await ctx.reply(
           `⏰ <b>Scheduled Mint Time</b>\n\n` +
-            `Send the mint time in ISO format or Unix timestamp.\n` +
-            `Example: ${code("2025-01-15T18:00:00Z")}`,
+            `Send the target mint time in ISO format or Unix timestamp.\n` +
+            `Example: ${code("2026-09-01T18:00:00Z")}`,
           { parse_mode: "HTML" },
         );
       } else {
-        await ctx.reply("Please send 'now' or 'scheduled'.", {
+        await ctx.reply("Please select timing mode below:", {
           parse_mode: "HTML",
+          reply_markup: getSnipeTimingKeyboard(),
         });
       }
       break;
@@ -787,7 +630,7 @@ bot.on("message:text", async (ctx) => {
 
       if (isNaN(scheduledDate.getTime())) {
         await ctx.reply(
-          "❌ Invalid time. Try ISO format like '2025-01-15T18:00:00Z'",
+          "❌ Invalid time. Try ISO format like '2026-09-01T18:00:00Z'",
         );
         return;
       }
@@ -807,8 +650,123 @@ bot.on("message:text", async (ctx) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HELPER FUNCTIONS
+// 6. ACTION HELPER FUNCTIONS
 // ─────────────────────────────────────────────────────────────────────────────
+
+async function promptAddWallet(ctx: Context & SessionFlavor<UserSession>) {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+
+  await ctx.reply(
+    `🔑 <b>Send me a private key to add.</b>\n\n` +
+      `The key is encrypted in memory (AES-256-GCM) and never saved to disk.\n` +
+      `Send /cancel_w to abort.`,
+    { parse_mode: "HTML" },
+  );
+
+  registerPendingHandler(chatId, async (msgCtx, _next) => {
+    if (!msgCtx.message?.text) return;
+
+    if (msgCtx.message.text === "/cancel_w") {
+      await msgCtx.reply("❌ Cancelled adding wallet.", {
+        reply_markup: getWalletsKeyboard(ctx.session.walletAddresses.length > 0),
+      });
+      return;
+    }
+
+    const key = msgCtx.message.text.trim();
+
+    try {
+      const wallet = new Wallet(key);
+      const encrypted = encryptWallet(key);
+
+      ctx.session.wallets.push(encrypted);
+      ctx.session.walletAddresses.push(wallet.address);
+
+      await msgCtx.reply(
+        `✅ <b>Wallet added successfully!</b>\n\nAddress: ${code(wallet.address)}`,
+        {
+          parse_mode: "HTML",
+          reply_markup: getWalletsKeyboard(true),
+        },
+      );
+    } catch (err: any) {
+      await msgCtx.reply(
+        `❌ <b>Invalid private key:</b> ${esc(err.message || "Could not parse key")}`,
+        {
+          reply_markup: getWalletsKeyboard(ctx.session.walletAddresses.length > 0),
+        },
+      );
+    }
+  });
+}
+
+async function displayWalletBalances(ctx: Context & SessionFlavor<UserSession>) {
+  const sess = ctx.session;
+
+  if (sess.walletAddresses.length === 0) {
+    await ctx.reply("⚠️ No wallets loaded. Use the button below to add one.", {
+      reply_markup: getWalletsKeyboard(false),
+    });
+    return;
+  }
+
+  const chain = resolveChain(sess.settings.activeChain);
+  const rpc = sess.settings.customRpc || chain?.rpc.public[0];
+  if (!rpc) {
+    await ctx.reply("⚠️ No RPC configured to fetch balances.", {
+      reply_markup: getSettingsKeyboard(sess),
+    });
+    return;
+  }
+
+  const provider = new JsonRpcProvider(rpc);
+
+  const lines = await Promise.all(
+    sess.walletAddresses.map(async (addr, i) => {
+      try {
+        const balance = await provider.getBalance(addr);
+        return `${i + 1}. ${code(addr)}\n   💰 <b>${formatEther(balance)} ETH</b>`;
+      } catch {
+        return `${i + 1}. ${code(addr)}\n   💰 Balance: <i>unknown</i>`;
+      }
+    }),
+  );
+
+  await ctx.reply(
+    `👤 <b>Wallet Balances (${sess.walletAddresses.length}):</b>\n\n` +
+      lines.join("\n\n"),
+    {
+      parse_mode: "HTML",
+      reply_markup: getWalletsKeyboard(true),
+    },
+  );
+}
+
+async function startSnipeWizard(ctx: Context & SessionFlavor<UserSession>) {
+  const sess = ctx.session;
+
+  if (sess.walletAddresses.length === 0) {
+    await ctx.reply(
+      "⚠️ <b>Add wallets first before sniping.</b>\nClick below to add a wallet:",
+      {
+        parse_mode: "HTML",
+        reply_markup: getWalletsKeyboard(false),
+      },
+    );
+    return;
+  }
+
+  sess.snipeWizard = { step: 1 };
+  await ctx.reply(
+    `🎯 <b>SeaDrop Snipe Wizard</b>\n\n` +
+      `Step 1/6: <b>Contract Address</b>\n` +
+      `Send the NFT contract address (<code>0x...</code>).`,
+    {
+      parse_mode: "HTML",
+    },
+  );
+}
 
 async function showSnipeSummary(ctx: Context, sess: UserSession) {
   const wizard = sess.snipeWizard!;
@@ -816,25 +774,329 @@ async function showSnipeSummary(ctx: Context, sess: UserSession) {
 
   const timingText =
     wizard.timingMode === "now"
-      ? "🚀 Fire Now"
+      ? "🚀 Fire Immediately (Now)"
       : `⏰ Scheduled: ${wizard.scheduledTime}`;
 
   const text =
-    `📋 <b>Snipe Summary</b>\n\n` +
-    `Contract: ${code(wizard.contractAddress!)}\n` +
-    `Quantity: ${wizard.quantity} per wallet\n` +
-    `Max Fee: ${esc(wizard.maxFeePerGas!)} Gwei\n` +
-    `Priority Fee: ${esc(wizard.maxPriorityFee!)} Gwei\n` +
-    `Timing: ${esc(timingText)}\n` +
-    `Wallets: ${sess.walletAddresses.length}\n` +
-    `Network: ${esc(chain?.name || "Robinhood Chain")}\n\n` +
-    `<b>Send /confirm_snipe to execute, or /cancel to abort.</b>`;
+    `📋 <b>Snipe Configuration Summary</b>\n\n` +
+    `• <b>Contract:</b> ${code(wizard.contractAddress!)}\n` +
+    `• <b>Quantity:</b> <code>${wizard.quantity}</code> per wallet\n` +
+    `• <b>Max Fee:</b> <code>${esc(wizard.maxFeePerGas!)} Gwei</code>\n` +
+    `• <b>Priority Fee:</b> <code>${esc(wizard.maxPriorityFee!)} Gwei</code>\n` +
+    `• <b>Timing:</b> ${esc(timingText)}\n` +
+    `• <b>Wallets:</b> <code>${sess.walletAddresses.length}</code>\n` +
+    `• <b>Network:</b> ${esc(chain?.name || "Robinhood Chain")}\n\n` +
+    `<i>Click below to confirm and start:</i>`;
 
-  await ctx.reply(text, { parse_mode: "HTML" });
+  await ctx.reply(text, {
+    parse_mode: "HTML",
+    reply_markup: getSnipeConfirmKeyboard(),
+  });
+}
+
+async function executeConfirmedSnipe(ctx: Context & SessionFlavor<UserSession>) {
+  const sess = ctx.session;
+  const wizard = sess.snipeWizard;
+
+  if (!wizard || wizard.step !== 6 || !wizard.contractAddress) {
+    await ctx.reply("⚠️ No snipe to confirm. Click below to start a new snipe:", {
+      reply_markup: getMainMenuKeyboard(),
+    });
+    return;
+  }
+
+  const chain = resolveChain(sess.settings.activeChain);
+  const rpcUrls = resolveRpcUrls(
+    sess.settings.customRpc,
+    process.env.ADDITIONAL_RPC_URLS || "",
+  );
+
+  await ctx.reply("🔍 Building mint plan from on-chain data...");
+
+  const plan = await buildMintPlan(
+    rpcUrls[0],
+    wizard.contractAddress,
+    wizard.quantity!,
+  );
+  if (!plan) {
+    await ctx.reply(
+      "❌ Could not build mint plan. Contract may not be a SeaDrop collection.",
+      {
+        reply_markup: getMainMenuKeyboard(),
+      },
+    );
+    sess.snipeWizard = undefined;
+    return;
+  }
+
+  const maxFee = parseUnits(wizard.maxFeePerGas!, "gwei");
+  const maxTip = parseUnits(wizard.maxPriorityFee!, "gwei");
+
+  const snipeId = `snipe_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const activeSnipe: ActiveSnipe = {
+    id: snipeId,
+    contractAddress: wizard.contractAddress,
+    quantity: wizard.quantity!,
+    maxFeePerGas: wizard.maxFeePerGas!,
+    maxPriorityFee: wizard.maxPriorityFee!,
+    timingMode: wizard.timingMode!,
+    scheduledTime: wizard.scheduledTime
+      ? new Date(wizard.scheduledTime)
+      : undefined,
+    status: wizard.timingMode === "now" ? "firing" : "waiting",
+    txHashes: [],
+    startedAt: new Date(),
+  };
+
+  sess.activeSnipes.push(activeSnipe);
+  sess.snipeWizard = undefined;
+
+  if (wizard.timingMode === "now") {
+    await ctx.reply("🚀 <b>Firing immediately to RPCs...</b>", {
+      parse_mode: "HTML",
+    });
+
+    try {
+      const results = await executeSnipe(
+        sess.wallets.map((w) => decryptWallet(w)),
+        plan,
+        rpcUrls,
+        maxFee,
+        maxTip,
+        250_000,
+        BigInt(chain?.chainId || DEFAULT_CHAIN.chainId),
+        (log) => sess.logs.push(log),
+      );
+
+      activeSnipe.txHashes = results.map((r) => r.txHash);
+      activeSnipe.status = "completed";
+
+      const resultLines = results.map((r) => {
+        const icon =
+          r.status === "confirmed" ? "✅" : r.status === "failed" ? "❌" : "⏳";
+        const addr = r.address.slice(0, 10) + "..." + r.address.slice(-6);
+        const txLabel = r.txHash.slice(0, 16) + "...";
+        let line = `${icon} ${code(addr)}\n  TX: ${link(txLabel, r.explorerUrl)}`;
+        if (r.blockNumber) {
+          line += `\n  Block: ${r.blockNumber} | Gas: ${r.gasUsed}`;
+        }
+        return line;
+      });
+
+      await ctx.reply(
+        `📊 <b>Snipe Results</b>\n\n` + resultLines.join("\n\n"),
+        {
+          parse_mode: "HTML",
+          reply_markup: getStatusKeyboard(),
+          link_preview_options: { is_disabled: true },
+        },
+      );
+    } catch (err: any) {
+      activeSnipe.status = "failed";
+      await ctx.reply(`❌ <b>Snipe failed:</b> ${esc(err.message)}`, {
+        parse_mode: "HTML",
+        reply_markup: getMainMenuKeyboard(),
+      });
+    }
+  } else {
+    // Scheduled
+    const scheduledTime = new Date(wizard.scheduledTime!);
+    const waitMs = scheduledTime.getTime() - Date.now();
+
+    await ctx.reply(
+      `⏰ <b>Scheduled Snipe Active!</b>\n\n` +
+        `Will fire at: <code>${esc(scheduledTime.toISOString())}</code>\n` +
+        `Waiting: <b>${Math.ceil(waitMs / 1000)}s</b>\n\n` +
+        `Use /cancel or the button below to abort before it fires.`,
+      {
+        parse_mode: "HTML",
+        reply_markup: getStatusKeyboard(),
+      },
+    );
+
+    const timeoutId = setTimeout(async () => {
+      activeSnipe.status = "firing";
+      try {
+        const results = await executeSnipe(
+          sess.wallets.map((w) => decryptWallet(w)),
+          plan,
+          rpcUrls,
+          maxFee,
+          maxTip,
+          250_000,
+          BigInt(chain?.chainId || DEFAULT_CHAIN.chainId),
+          (log) => sess.logs.push(log),
+        );
+
+        activeSnipe.txHashes = results.map((r) => r.txHash);
+        activeSnipe.status = "completed";
+
+        if (ctx.chat) {
+          const resultLines = results.map((r) => {
+            const icon =
+              r.status === "confirmed"
+                ? "✅"
+                : r.status === "failed"
+                  ? "❌"
+                  : "⏳";
+            const addr = r.address.slice(0, 10) + "...";
+            return `${icon} ${code(addr)} — ${link("TX", r.explorerUrl)}`;
+          });
+
+          await ctx.api.sendMessage(
+            ctx.chat.id,
+            `🚀 <b>Scheduled Snipe Fired!</b>\n\n` + resultLines.join("\n"),
+            {
+              parse_mode: "HTML",
+              reply_markup: getStatusKeyboard(),
+              link_preview_options: { is_disabled: true },
+            },
+          );
+        }
+      } catch (err: any) {
+        activeSnipe.status = "failed";
+        if (ctx.chat) {
+          await ctx.api.sendMessage(
+            ctx.chat.id,
+            `❌ <b>Scheduled snipe failed:</b> ${esc(err.message)}`,
+            {
+              parse_mode: "HTML",
+              reply_markup: getMainMenuKeyboard(),
+            },
+          );
+        }
+      }
+    }, waitMs);
+
+    (activeSnipe as any)._timeoutId = timeoutId;
+  }
+}
+
+async function promptSetChain(ctx: Context & SessionFlavor<UserSession>) {
+  await ctx.reply("📡 <b>Select a network:</b>", {
+    parse_mode: "HTML",
+    reply_markup: getChainSelectionKeyboard(),
+  });
+}
+
+async function promptSetRpc(ctx: Context & SessionFlavor<UserSession>) {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+
+  await ctx.reply(
+    `🔗 <b>Set Custom RPC URL</b>\n\n` +
+      `Send a full RPC URL, or <code>default</code> to use the chain default.`,
+    { parse_mode: "HTML" },
+  );
+
+  registerPendingHandler(chatId, async (msgCtx, _next) => {
+    if (!msgCtx.message?.text) return;
+    const rpc = msgCtx.message.text.trim();
+    if (rpc.toLowerCase() === "default") {
+      ctx.session.settings.customRpc = "";
+      await msgCtx.reply("✅ RPC reset to chain default.", {
+        reply_markup: getSettingsKeyboard(ctx.session),
+      });
+    } else {
+      try {
+        new URL(rpc);
+        ctx.session.settings.customRpc = rpc;
+        await msgCtx.reply(
+          `✅ Custom RPC set: ${code(rpc.slice(0, 50) + "...")}`,
+          {
+            parse_mode: "HTML",
+            reply_markup: getSettingsKeyboard(ctx.session),
+          },
+        );
+      } catch {
+        await msgCtx.reply("❌ Invalid URL. Please send a valid RPC endpoint.", {
+          reply_markup: getSettingsKeyboard(ctx.session),
+        });
+      }
+    }
+  });
+}
+
+async function promptSetMaxFee(ctx: Context & SessionFlavor<UserSession>) {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+  await ctx.reply("Send the new max fee per gas in Gwei:");
+
+  registerPendingHandler(chatId, async (msgCtx, _next) => {
+    if (!msgCtx.message?.text) return;
+    const val = parseFloat(msgCtx.message.text.trim());
+    if (isNaN(val) || val <= 0) {
+      await msgCtx.reply("❌ Invalid value. Send a positive number in Gwei.", {
+        reply_markup: getSettingsKeyboard(ctx.session),
+      });
+      return;
+    }
+    ctx.session.settings.maxFeePerGas = val.toString();
+    await msgCtx.reply(`✅ Max fee set to ${val} Gwei`, {
+      reply_markup: getSettingsKeyboard(ctx.session),
+    });
+  });
+}
+
+async function promptSetPriority(ctx: Context & SessionFlavor<UserSession>) {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+  await ctx.reply("Send the new priority fee (tip) in Gwei:");
+
+  registerPendingHandler(chatId, async (msgCtx, _next) => {
+    if (!msgCtx.message?.text) return;
+    const val = parseFloat(msgCtx.message.text.trim());
+    if (isNaN(val) || val <= 0) {
+      await msgCtx.reply("❌ Invalid value. Send a positive number in Gwei.", {
+        reply_markup: getSettingsKeyboard(ctx.session),
+      });
+      return;
+    }
+    ctx.session.settings.maxPriorityFee = val.toString();
+    await msgCtx.reply(`✅ Priority fee set to ${val} Gwei`, {
+      reply_markup: getSettingsKeyboard(ctx.session),
+    });
+  });
+}
+
+async function handleCancelTasks(ctx: Context & SessionFlavor<UserSession>) {
+  const sess = ctx.session;
+
+  if (sess.snipeWizard) {
+    sess.snipeWizard = undefined;
+  }
+
+  const pending = sess.activeSnipes.filter(
+    (s) => s.status === "pending" || s.status === "waiting",
+  );
+
+  if (pending.length === 0) {
+    await ctx.reply("ℹ️ No active tasks to cancel.", {
+      reply_markup: getMainMenuKeyboard(),
+    });
+    return;
+  }
+
+  for (const snipe of pending) {
+    snipe.status = "cancelled";
+    const timeoutId = (snipe as any)._timeoutId;
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+    sess.logs.push({
+      timestamp: new Date(),
+      message: `Cancelled snipe for ${snipe.contractAddress.slice(0, 10)}...`,
+      type: "warning",
+    });
+  }
+
+  await ctx.reply(`✅ Cancelled ${pending.length} pending task(s).`, {
+    reply_markup: getMainMenuKeyboard(),
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ERROR HANDLER + START
+// 7. ERROR HANDLER
 // ─────────────────────────────────────────────────────────────────────────────
 bot.catch((err) => {
   console.error("Bot error:", err);
