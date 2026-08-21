@@ -7,6 +7,7 @@ export const BOT_COMMANDS = [
   { command: "snipe", description: "🎯 Start interactive snipe wizard" },
   { command: "wallets", description: "👤 Manage in-memory wallets" },
   { command: "settings", description: "⚙️ Gas, RPC & network settings" },
+  { command: "set_rpc", description: "🔗 Set or update your Alchemy RPC URL" },
   { command: "status", description: "📊 View active tasks & recent logs" },
   { command: "cancel", description: "🛑 Cancel pending tasks" },
   { command: "help", description: "❓ Bot guide & documentation" },
@@ -25,9 +26,37 @@ export function link(label: string, url: string): string {
   return `<a href="${url}">${esc(label)}</a>`;
 }
 
-export function getMainMenuKeyboard(): InlineKeyboard {
-  return new InlineKeyboard()
-    .text("🎯 Snipe NFT", "menu_snipe")
+/** Safely mask an Alchemy/RPC URL to protect API keys in chat */
+export function maskRpcUrl(url: string): string {
+  if (!url) return "⚠️ None (using public fallback)";
+  try {
+    const parsed = new URL(url);
+    const pathname = parsed.pathname;
+    if (pathname.length > 8) {
+      return `${parsed.origin}${pathname.slice(0, 4)}••••${pathname.slice(-4)}`;
+    }
+    return `${parsed.origin}/••••`;
+  } catch {
+    if (url.length > 20) {
+      return url.slice(0, 15) + "••••" + url.slice(-4);
+    }
+    return "••••••••";
+  }
+}
+
+/** Check if URL appears to be an Alchemy endpoint */
+export function isAlchemyUrl(url: string): boolean {
+  return url.toLowerCase().includes("alchemy.com");
+}
+
+export function getMainMenuKeyboard(hasRpc: boolean = true): InlineKeyboard {
+  const kb = new InlineKeyboard();
+
+  if (!hasRpc) {
+    kb.text("🔗 ⚡ Set Alchemy RPC (Required)", "set_rpc_prompt").row();
+  }
+
+  kb.text("🎯 Snipe NFT", "menu_snipe")
     .text("👤 Wallets", "menu_wallets")
     .row()
     .text("⚙️ Settings", "menu_settings")
@@ -37,6 +66,8 @@ export function getMainMenuKeyboard(): InlineKeyboard {
     .text("❓ Help", "menu_help")
     .row()
     .text("🔄 Refresh Dashboard", "menu_refresh_start");
+
+  return kb;
 }
 
 export function getWalletsKeyboard(hasWallets: boolean): InlineKeyboard {
@@ -53,19 +84,26 @@ export function getWalletsKeyboard(hasWallets: boolean): InlineKeyboard {
 }
 
 export function getSettingsKeyboard(sess: UserSession): InlineKeyboard {
-  const chain = resolveChain(sess.settings.activeChain);
   const capLabel = sess.settings.gasSafetyCap ? "ON ✅" : "OFF ❌";
+  const hasCustomRpc = Boolean(sess.settings.customRpc);
 
-  return new InlineKeyboard()
-    .text(`📡 Chain: ${chain?.name || "Robinhood"}`, "set_chain_prompt")
-    .text("🔗 Set Custom RPC", "set_rpc_prompt")
-    .row()
+  const kb = new InlineKeyboard()
+    .text("🔗 Set / Update Alchemy RPC", "set_rpc_prompt");
+
+  if (hasCustomRpc) {
+    kb.text("🗑️ Reset RPC", "reset_rpc_action");
+  }
+
+  kb.row()
     .text(`⛽ Max Fee: ${sess.settings.maxFeePerGas} Gwei`, "set_maxfee_prompt")
     .text(`⚡ Priority: ${sess.settings.maxPriorityFee} Gwei`, "set_priority_prompt")
     .row()
+    .text("📡 Switch Network", "set_chain_prompt")
     .text(`🛡️ Safety Cap: ${capLabel}`, "toggle_safety_action")
     .row()
     .text("🔙 Main Menu", "menu_start");
+
+  return kb;
 }
 
 export function getStatusKeyboard(): InlineKeyboard {
@@ -78,9 +116,10 @@ export function getStatusKeyboard(): InlineKeyboard {
 
 export function getHelpKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
+    .text("🔗 Set Alchemy RPC", "set_rpc_prompt")
     .text("🎯 Snipe NFT", "menu_snipe")
-    .text("👤 Wallets", "menu_wallets")
     .row()
+    .text("👤 Wallets", "menu_wallets")
     .text("🔙 Main Menu", "menu_start");
 }
 
@@ -122,6 +161,21 @@ export function renderStartText(sess: UserSession): string {
     (s) => s.status === "pending" || s.status === "waiting",
   ).length;
 
+  const hasRpc = Boolean(sess.settings.customRpc);
+
+  let rpcBanner = "";
+  if (!hasRpc) {
+    rpcBanner =
+      `⚠️ <b>Alchemy RPC Required!</b>\n` +
+      `To ensure fast transaction blasting and avoid public rate limits, please configure your own Alchemy RPC:\n` +
+      `1️⃣ Get your free RPC endpoint at <a href="https://alchemy.com">alchemy.com</a>\n` +
+      `2️⃣ Click <b>🔗 Set Alchemy RPC</b> below or send /set_rpc to save it.\n\n`;
+  }
+
+  const rpcDisplay = hasRpc
+    ? `🔗 <b>Alchemy RPC:</b> ${code(maskRpcUrl(sess.settings.customRpc))}`
+    : `🔗 <b>RPC:</b> ⚠️ <i>None set (using fallback ${code(chain?.rpc.public[0] || "N/A")})</i>`;
+
   const walletLines =
     walletCount === 0
       ? "⚠️ No wallets loaded. Click <b>Wallets</b> below to add one."
@@ -133,12 +187,9 @@ export function renderStartText(sess: UserSession): string {
           )
           .join("\n");
 
-  const rpcDisplay = sess.settings.customRpc
-    ? "🔗 <b>Custom RPC:</b> " + code(sess.settings.customRpc.slice(0, 40) + "...")
-    : "🔗 <b>Default RPC:</b> " + code(chain?.rpc.public[0] || "N/A");
-
   return (
     `🔫 <b>SeaDrop NFT Sniper Bot</b>\n\n` +
+    rpcBanner +
     `📡 <b>Network:</b> ${esc(chain?.name || "Robinhood Chain")} (Chain ID: ${chain?.chainId || 4663})\n` +
     `${rpcDisplay}\n\n` +
     `💰 <b>Gas Settings:</b>\n` +
@@ -170,15 +221,18 @@ export function renderWalletsText(sess: UserSession): string {
 
 export function renderSettingsText(sess: UserSession): string {
   const chain = resolveChain(sess.settings.activeChain);
+  const rpcStatus = sess.settings.customRpc
+    ? `✅ ${code(maskRpcUrl(sess.settings.customRpc))}`
+    : `⚠️ <i>Not configured (fallback: ${code(chain?.rpc.public[0] || "N/A")})</i>`;
 
   return (
     `⚙️ <b>Bot Settings</b>\n\n` +
+    `🔗 <b>Alchemy RPC URL:</b>\n${rpcStatus}\n\n` +
     `📡 <b>Network:</b> ${esc(chain?.name || "Robinhood Chain")} (Chain ID: ${chain?.chainId || 4663})\n` +
-    `🔗 <b>RPC URL:</b> ${code(sess.settings.customRpc || chain?.rpc.public[0] || "N/A")}\n\n` +
     `⛽ <b>Max Fee Per Gas:</b> ${code(sess.settings.maxFeePerGas + " Gwei")}\n` +
     `⚡ <b>Priority Fee (Tip):</b> ${code(sess.settings.maxPriorityFee + " Gwei")}\n` +
     `🛡️ <b>Gas Safety Cap:</b> <b>${sess.settings.gasSafetyCap ? "ON ✅" : "OFF ❌"}</b>\n\n` +
-    `<i>Tap a button below to configure:</i>`
+    `<i>💡 You can update or replace your personal Alchemy RPC anytime below:</i>`
   );
 }
 
@@ -237,15 +291,21 @@ export function renderHelpText(): string {
   return (
     `❓ <b>SeaDrop Sniper Bot Guide</b>\n\n` +
     `This bot allows you to snipe SeaDrop NFT public mints with zero delay directly from Telegram.\n\n` +
+    `<b>Alchemy RPC Setup:</b>\n` +
+    `1. Go to <a href="https://alchemy.com">alchemy.com</a> and sign up for free.\n` +
+    `2. Create an App for your target EVM network.\n` +
+    `3. Copy the HTTPS RPC URL (e.g. <code>https://...g.alchemy.com/v2/...</code>).\n` +
+    `4. Use <b>/set_rpc</b> or click <b>Set Alchemy RPC</b> in Settings to save it.\n\n` +
     `<b>Key Features:</b>\n` +
-    `• <b>Pre-Signing & Blasting:</b> Transactions are pre-signed and blasted to multiple RPCs simultaneously at T-0.\n` +
+    `• <b>Pre-Signing & Blasting:</b> Transactions are pre-signed and blasted across RPCs at T-0.\n` +
     `• <b>Encrypted Wallets:</b> Private keys are encrypted in-memory with AES-256-GCM.\n` +
     `• <b>Scheduler:</b> Set exact mint timestamps to execute drops automatically.\n\n` +
     `<b>Available Commands:</b>\n` +
     `/start — Open the main dashboard\n` +
+    `/set_rpc — Set or update your personal Alchemy RPC URL\n` +
     `/snipe — Launch the 6-step guided snipe wizard\n` +
     `/wallets — Add, inspect, and manage loaded wallets\n` +
-    `/settings — Adjust gas fees, custom RPCs, and safety caps\n` +
+    `/settings — Adjust gas fees, custom Alchemy RPC, and safety caps\n` +
     `/status — Monitor running tasks, countdowns, and execution logs\n` +
     `/cancel — Stop active wizard or cancel scheduled tasks\n` +
     `/help — Show this help guide\n\n` +

@@ -52,12 +52,14 @@ WEBHOOK_SECRET=your_12_char_secret_token
 ## Quick Start
 
 ### 1. Local Development (Long-Polling)
+
 ```bash
 npm install
 npm run dev
 ```
 
 ### 2. Production Deployment (Vercel Webhook)
+
 1. Deploy the repository to [Vercel](https://vercel.com).
 2. Set environment variables (`BOT_TOKEN`, `DEFAULT_RPC_URL`, `WEBHOOK_SECRET`) in your Vercel project settings.
 3. Register your webhook URL with Telegram:
@@ -69,16 +71,17 @@ npm run dev
 
 ## Bot Commands
 
-| Command | Description |
-| :--- | :--- |
-| `/start` | View status dashboard, loaded wallets, and gas settings |
-| `/wallets` | Manage in-memory encrypted wallets (`/wallets_add`, `/wallets_view`, `/wallets_clear`) |
-| `/snipe` | Start the 6-step interactive mint snipe wizard |
-| `/confirm_snipe` | Fire or schedule the configured snipe |
-| `/settings` | Configure RPCs, gas caps, and network |
-| `/status` | View active snipes, countdowns, and execution logs |
-| `/cancel` | Cancel pending or scheduled snipes |
-| `/help` | Display usage guide and command reference |
+| Command          | Description                                                                            |
+| :--------------- | :------------------------------------------------------------------------------------- |
+| `/start`         | View status dashboard, loaded wallets, and gas settings                                |
+| `/wallets`       | Manage in-memory encrypted wallets (`/wallets_add`, `/wallets_view`, `/wallets_clear`) |
+| `/snipe`         | Start the 6-step interactive mint snipe wizard                                         |
+| `/confirm_snipe` | Fire or schedule the configured snipe                                                  |
+| `/settings`      | Configure RPCs, gas caps, and network                                                  |
+| `/set_rpc`       | Set or update your personal Alchemy RPC endpoint                                       |
+| `/status`        | View active snipes, countdowns, and execution logs                                     |
+| `/cancel`        | Cancel pending or scheduled snipes                                                     |
+| `/help`          | Display usage guide and command reference                                              |
 
 ---
 

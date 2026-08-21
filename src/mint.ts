@@ -23,18 +23,20 @@ export interface MintResult {
   explorerUrl: string;
 }
 
-// Resolve RPC URLs: custom > env default > chain defaults
+// Resolve RPC URLs: user custom Alchemy RPC > additional backup RPCs > default fallback
 export function resolveRpcUrls(
   customRpc: string,
   additionalRpcEnv: string,
 ): string[] {
   const urls: string[] = [];
   if (customRpc) urls.push(customRpc);
-  const defaultRpc =
-    process.env.DEFAULT_RPC_URL || "https://rpc.mainnet.chain.robinhood.com";
-  urls.push(defaultRpc);
   if (additionalRpcEnv) {
     urls.push(...additionalRpcEnv.split(",").filter(Boolean));
+  }
+  const defaultRpc =
+    process.env.DEFAULT_RPC_URL || "https://rpc.mainnet.chain.robinhood.com";
+  if (!urls.includes(defaultRpc)) {
+    urls.push(defaultRpc);
   }
   return [...new Set(urls)];
 }

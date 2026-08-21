@@ -26,6 +26,8 @@ import {
   esc,
   code,
   link,
+  maskRpcUrl,
+  isAlchemyUrl,
   getMainMenuKeyboard,
   getWalletsKeyboard,
   getSettingsKeyboard,
@@ -113,12 +115,14 @@ bot.on("message", async (ctx, next) => {
 // 3. COMMAND HANDLERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-// /start — Main dashboard
+// /start — Main dashboard with Alchemy RPC onboarding
 bot.command("start", async (ctx) => {
-  const text = renderStartText(ctx.session);
+  const sess = ctx.session;
+  const hasRpc = Boolean(sess.settings.customRpc);
+  const text = renderStartText(sess);
   await ctx.reply(text, {
     parse_mode: "HTML",
-    reply_markup: getMainMenuKeyboard(),
+    reply_markup: getMainMenuKeyboard(hasRpc),
     link_preview_options: { is_disabled: true },
   });
 });
@@ -129,6 +133,7 @@ bot.command("help", async (ctx) => {
   await ctx.reply(text, {
     parse_mode: "HTML",
     reply_markup: getHelpKeyboard(),
+    link_preview_options: { is_disabled: true },
   });
 });
 
@@ -186,7 +191,7 @@ bot.command("set_chain", async (ctx) => {
   await promptSetChain(ctx);
 });
 
-// /set_rpc — Set custom RPC URL
+// /set_rpc — Set or update Alchemy RPC URL
 bot.command("set_rpc", async (ctx) => {
   await promptSetRpc(ctx);
 });
@@ -233,17 +238,19 @@ bot.command("cancel", async (ctx) => {
 // Navigation: Back to / Refresh Start Dashboard
 bot.callbackQuery(["menu_start", "menu_refresh_start"], async (ctx) => {
   await ctx.answerCallbackQuery({ text: "Dashboard refreshed" });
-  const text = renderStartText(ctx.session);
+  const sess = ctx.session;
+  const hasRpc = Boolean(sess.settings.customRpc);
+  const text = renderStartText(sess);
   try {
     await ctx.editMessageText(text, {
       parse_mode: "HTML",
-      reply_markup: getMainMenuKeyboard(),
+      reply_markup: getMainMenuKeyboard(hasRpc),
       link_preview_options: { is_disabled: true },
     });
   } catch {
     await ctx.reply(text, {
       parse_mode: "HTML",
-      reply_markup: getMainMenuKeyboard(),
+      reply_markup: getMainMenuKeyboard(hasRpc),
       link_preview_options: { is_disabled: true },
     });
   }
@@ -257,11 +264,13 @@ bot.callbackQuery("menu_help", async (ctx) => {
     await ctx.editMessageText(text, {
       parse_mode: "HTML",
       reply_markup: getHelpKeyboard(),
+      link_preview_options: { is_disabled: true },
     });
   } catch {
     await ctx.reply(text, {
       parse_mode: "HTML",
       reply_markup: getHelpKeyboard(),
+      link_preview_options: { is_disabled: true },
     });
   }
 });
@@ -336,6 +345,24 @@ bot.callbackQuery("menu_settings", async (ctx) => {
   }
 });
 
+// Settings: Reset RPC to Default
+bot.callbackQuery("reset_rpc_action", async (ctx) => {
+  ctx.session.settings.customRpc = "";
+  await ctx.answerCallbackQuery({ text: "RPC reset to default fallback" });
+  const text = renderSettingsText(ctx.session);
+  try {
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      reply_markup: getSettingsKeyboard(ctx.session),
+    });
+  } catch {
+    await ctx.reply(text, {
+      parse_mode: "HTML",
+      reply_markup: getSettingsKeyboard(ctx.session),
+    });
+  }
+});
+
 // Settings: Toggle Safety Cap
 bot.callbackQuery("toggle_safety_action", async (ctx) => {
   ctx.session.settings.gasSafetyCap = !ctx.session.settings.gasSafetyCap;
@@ -368,7 +395,7 @@ bot.callbackQuery("set_priority_prompt", async (ctx) => {
   await promptSetPriority(ctx);
 });
 
-// Settings: Set Custom RPC Prompt
+// Settings: Set Custom / Alchemy RPC Prompt
 bot.callbackQuery("set_rpc_prompt", async (ctx) => {
   await ctx.answerCallbackQuery();
   await promptSetRpc(ctx);
@@ -482,7 +509,7 @@ bot.on("message:text", async (ctx) => {
   if (text === "/cancel") {
     sess.snipeWizard = undefined;
     await ctx.reply("❌ Snipe wizard cancelled.", {
-      reply_markup: getMainMenuKeyboard(),
+      reply_markup: getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
     });
     return;
   }
@@ -499,9 +526,12 @@ bot.on("message:text", async (ctx) => {
       const chain = resolveChain(sess.settings.activeChain);
       const rpc = sess.settings.customRpc || chain?.rpc.public[0];
       if (!rpc) {
-        await ctx.reply("❌ No RPC configured. Use /settings first.", {
-          reply_markup: getSettingsKeyboard(sess),
-        });
+        await ctx.reply(
+          "❌ No RPC configured. Please set your Alchemy RPC first with /set_rpc.",
+          {
+            reply_markup: getSettingsKeyboard(sess),
+          },
+        );
         sess.snipeWizard = undefined;
         return;
       }
@@ -733,9 +763,14 @@ async function displayWalletBalances(ctx: Context & SessionFlavor<UserSession>) 
     }),
   );
 
+  const rpcNote = !sess.settings.customRpc
+    ? "\n\n💡 <i>Tip: Set your Alchemy RPC via /set_rpc for fastest balance checks and sniping.</i>"
+    : "";
+
   await ctx.reply(
     `👤 <b>Wallet Balances (${sess.walletAddresses.length}):</b>\n\n` +
-      lines.join("\n\n"),
+      lines.join("\n\n") +
+      rpcNote,
     {
       parse_mode: "HTML",
       reply_markup: getWalletsKeyboard(true),
@@ -777,6 +812,10 @@ async function showSnipeSummary(ctx: Context, sess: UserSession) {
       ? "🚀 Fire Immediately (Now)"
       : `⏰ Scheduled: ${wizard.scheduledTime}`;
 
+  const rpcDisplay = sess.settings.customRpc
+    ? `Alchemy Dedicated (${maskRpcUrl(sess.settings.customRpc)})`
+    : `⚠️ Public Fallback (${chain?.rpc.public[0] || "N/A"})`;
+
   const text =
     `📋 <b>Snipe Configuration Summary</b>\n\n` +
     `• <b>Contract:</b> ${code(wizard.contractAddress!)}\n` +
@@ -785,6 +824,7 @@ async function showSnipeSummary(ctx: Context, sess: UserSession) {
     `• <b>Priority Fee:</b> <code>${esc(wizard.maxPriorityFee!)} Gwei</code>\n` +
     `• <b>Timing:</b> ${esc(timingText)}\n` +
     `• <b>Wallets:</b> <code>${sess.walletAddresses.length}</code>\n` +
+    `• <b>RPC Endpoint:</b> ${code(rpcDisplay)}\n` +
     `• <b>Network:</b> ${esc(chain?.name || "Robinhood Chain")}\n\n` +
     `<i>Click below to confirm and start:</i>`;
 
@@ -800,7 +840,7 @@ async function executeConfirmedSnipe(ctx: Context & SessionFlavor<UserSession>) 
 
   if (!wizard || wizard.step !== 6 || !wizard.contractAddress) {
     await ctx.reply("⚠️ No snipe to confirm. Click below to start a new snipe:", {
-      reply_markup: getMainMenuKeyboard(),
+      reply_markup: getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
     });
     return;
   }
@@ -822,7 +862,7 @@ async function executeConfirmedSnipe(ctx: Context & SessionFlavor<UserSession>) 
     await ctx.reply(
       "❌ Could not build mint plan. Contract may not be a SeaDrop collection.",
       {
-        reply_markup: getMainMenuKeyboard(),
+        reply_markup: getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
       },
     );
     sess.snipeWizard = undefined;
@@ -895,7 +935,7 @@ async function executeConfirmedSnipe(ctx: Context & SessionFlavor<UserSession>) 
       activeSnipe.status = "failed";
       await ctx.reply(`❌ <b>Snipe failed:</b> ${esc(err.message)}`, {
         parse_mode: "HTML",
-        reply_markup: getMainMenuKeyboard(),
+        reply_markup: getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
       });
     }
   } else {
@@ -961,7 +1001,7 @@ async function executeConfirmedSnipe(ctx: Context & SessionFlavor<UserSession>) 
             `❌ <b>Scheduled snipe failed:</b> ${esc(err.message)}`,
             {
               parse_mode: "HTML",
-              reply_markup: getMainMenuKeyboard(),
+              reply_markup: getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
             },
           );
         }
@@ -984,35 +1024,71 @@ async function promptSetRpc(ctx: Context & SessionFlavor<UserSession>) {
   if (!chatId) return;
 
   await ctx.reply(
-    `🔗 <b>Set Custom RPC URL</b>\n\n` +
-      `Send a full RPC URL, or <code>default</code> to use the chain default.`,
-    { parse_mode: "HTML" },
+    `🔗 <b>Configure Your Alchemy RPC Endpoint</b>\n\n` +
+      `Each user must provide their personal Alchemy RPC URL for dedicated speed and reliability.\n\n` +
+      `<b>How to get your free RPC URL:</b>\n` +
+      `1️⃣ Visit <a href="https://alchemy.com">alchemy.com</a> and create/log in to your account.\n` +
+      `2️⃣ Create an App for your chain and copy your HTTPS URL.\n` +
+      `   <i>Example:</i> <code>https://arb-sepolia.g.alchemy.com/v2/your-api-key</code>\n` +
+      `   <i>Example:</i> <code>https://eth-mainnet.g.alchemy.com/v2/your-api-key</code>\n\n` +
+      `👉 <b>Send your Alchemy HTTPS RPC URL now:</b>\n` +
+      `(Send <code>default</code> to reset to chain fallback, or /cancel to abort)`,
+    {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    },
   );
 
   registerPendingHandler(chatId, async (msgCtx, _next) => {
     if (!msgCtx.message?.text) return;
-    const rpc = msgCtx.message.text.trim();
-    if (rpc.toLowerCase() === "default") {
-      ctx.session.settings.customRpc = "";
-      await msgCtx.reply("✅ RPC reset to chain default.", {
+    const input = msgCtx.message.text.trim();
+
+    if (input === "/cancel") {
+      await msgCtx.reply("❌ Action cancelled.", {
         reply_markup: getSettingsKeyboard(ctx.session),
       });
-    } else {
-      try {
-        new URL(rpc);
-        ctx.session.settings.customRpc = rpc;
-        await msgCtx.reply(
-          `✅ Custom RPC set: ${code(rpc.slice(0, 50) + "...")}`,
-          {
-            parse_mode: "HTML",
-            reply_markup: getSettingsKeyboard(ctx.session),
-          },
-        );
-      } catch {
-        await msgCtx.reply("❌ Invalid URL. Please send a valid RPC endpoint.", {
-          reply_markup: getSettingsKeyboard(ctx.session),
-        });
+      return;
+    }
+
+    if (input.toLowerCase() === "default") {
+      ctx.session.settings.customRpc = "";
+      await msgCtx.reply("✅ RPC reset to chain fallback default.", {
+        reply_markup: getSettingsKeyboard(ctx.session),
+      });
+      return;
+    }
+
+    try {
+      const parsed = new URL(input);
+      if (!parsed.protocol.startsWith("http")) {
+        throw new Error("Protocol must be http or https");
       }
+
+      ctx.session.settings.customRpc = input;
+      const masked = maskRpcUrl(input);
+
+      let notice = "";
+      if (!isAlchemyUrl(input)) {
+        notice = "\n\n💡 <i>Note: This does not look like an Alchemy URL, but it has been saved as your custom endpoint.</i>";
+      }
+
+      await msgCtx.reply(
+        `✅ <b>Alchemy RPC Endpoint Saved!</b>\n\n` +
+          `Endpoint: ${code(masked)}${notice}\n\n` +
+          `Your snipe transactions will now be blasted via your dedicated RPC for maximum inclusion speed!`,
+        {
+          parse_mode: "HTML",
+          reply_markup: getMainMenuKeyboard(true),
+        },
+      );
+    } catch {
+      await msgCtx.reply(
+        "❌ Invalid URL. Please send a valid HTTPS RPC endpoint (e.g. <code>https://...alchemy.com/v2/...</code>).",
+        {
+          parse_mode: "HTML",
+          reply_markup: getSettingsKeyboard(ctx.session),
+        },
+      );
     }
   });
 }
@@ -1072,7 +1148,7 @@ async function handleCancelTasks(ctx: Context & SessionFlavor<UserSession>) {
 
   if (pending.length === 0) {
     await ctx.reply("ℹ️ No active tasks to cancel.", {
-      reply_markup: getMainMenuKeyboard(),
+      reply_markup: getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
     });
     return;
   }
@@ -1091,7 +1167,7 @@ async function handleCancelTasks(ctx: Context & SessionFlavor<UserSession>) {
   }
 
   await ctx.reply(`✅ Cancelled ${pending.length} pending task(s).`, {
-    reply_markup: getMainMenuKeyboard(),
+    reply_markup: getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
   });
 }
 
