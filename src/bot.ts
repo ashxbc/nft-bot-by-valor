@@ -86,9 +86,6 @@ function registerPendingHandler(
   pendingHandlers.set(chatId, handler);
 }
 
-// 12-Character Access Gate Key
-export const ACCESS_KEY = (process.env.ACCESS_KEY || "v9x2m4k7p8q3").trim();
-
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. SESSION MIDDLEWARE — MUST BE FIRST
 // ─────────────────────────────────────────────────────────────────────────────
@@ -97,61 +94,6 @@ bot.use(
     initial: createDefaultSession,
   }),
 );
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 1.5 AUTHENTICATION GATE MIDDLEWARE
-// Requires users to enter the 12-character access key before unlocking bot
-// ─────────────────────────────────────────────────────────────────────────────
-bot.use(async (ctx, next) => {
-  const sess = ctx.session;
-  if (!sess) return next();
-
-  // If already authenticated, allow through
-  if (sess.isAuthorized) {
-    return next();
-  }
-
-  const text = ctx.message?.text?.trim() || "";
-
-  // Check /start with key parameter (e.g. /start v9x2m4k7p8q3) or exact key text
-  const isStartWithKey =
-    text.startsWith("/start ") &&
-    text.slice(7).trim().toLowerCase() === ACCESS_KEY.toLowerCase();
-  const isExactKey = text.toLowerCase() === ACCESS_KEY.toLowerCase();
-
-  if (isStartWithKey || isExactKey) {
-    sess.isAuthorized = true;
-    const hasRpc = Boolean(sess.settings.customRpc);
-    await ctx.reply(
-      `🎉 <b>Access Granted!</b>\n\nWelcome to <b>SeaDrop NFT Sniper Bot</b>. Your access has been unlocked.`,
-      { parse_mode: "HTML" },
-    );
-    const startText = renderStartText(sess);
-    await ctx.reply(startText, {
-      parse_mode: "HTML",
-      reply_markup: getMainMenuKeyboard(hasRpc),
-      link_preview_options: { is_disabled: true },
-    });
-    return;
-  }
-
-  // If callback query on inline button, alert user to authenticate
-  if (ctx.callbackQuery) {
-    await ctx.answerCallbackQuery({
-      text: "🔒 Access Restricted. Enter the 12-character key first.",
-      show_alert: true,
-    });
-    return;
-  }
-
-  // Prompt the user to enter the access key
-  await ctx.reply(
-    `🔒 <b>Private Bot — Access Restricted</b>\n\n` +
-      `This bot requires authorization to access.\n` +
-      `Please enter your 12-character access key below to unlock:`,
-    { parse_mode: "HTML" },
-  );
-});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. PENDING HANDLER DISPATCHER
@@ -475,7 +417,9 @@ bot.callbackQuery(/^select_chain_(.+)$/, async (ctx) => {
   const chain = resolveChain(chainKey);
   if (chain) {
     ctx.session.settings.activeChain = chain.key;
-    await ctx.answerCallbackQuery({ text: `Network switched to ${chain.name}` });
+    await ctx.answerCallbackQuery({
+      text: `Network switched to ${chain.name}`,
+    });
   } else {
     await ctx.answerCallbackQuery({ text: "Chain not recognized" });
   }
@@ -553,7 +497,8 @@ bot.callbackQuery("snipe_timing_custom", async (ctx) => {
   if (!sess.snipeWizard) return;
 
   sess.snipeWizard.step = 51;
-  const startSec = sess.snipeWizard.detectedStartTime || Math.floor(Date.now() / 1000);
+  const startSec =
+    sess.snipeWizard.detectedStartTime || Math.floor(Date.now() / 1000);
   const endSec = sess.snipeWizard.detectedEndTime;
 
   let windowInfo = "";
@@ -624,9 +569,12 @@ bot.on("message:text", async (ctx) => {
         return;
       }
 
-      await ctx.reply("🔍 <i>Inspecting contract and detecting on-chain drop schedule...</i>", {
-        parse_mode: "HTML",
-      });
+      await ctx.reply(
+        "🔍 <i>Inspecting contract and detecting on-chain drop schedule...</i>",
+        {
+          parse_mode: "HTML",
+        },
+      );
 
       const drop = await fetchPublicDrop(rpc, text);
       if (drop) {
@@ -764,7 +712,11 @@ bot.on("message:text", async (ctx) => {
         wizard.timingMode = "now";
         wizard.step = 6;
         await showSnipeSummary(ctx, sess);
-      } else if (lower === "custom" || lower === "scheduled" || lower === "specific") {
+      } else if (
+        lower === "custom" ||
+        lower === "scheduled" ||
+        lower === "specific"
+      ) {
         wizard.step = 51;
         await ctx.reply(
           `⏰ <b>Set Specific Snipe Time</b>\n\n` +
@@ -773,11 +725,15 @@ bot.on("message:text", async (ctx) => {
           { parse_mode: "HTML" },
         );
       } else {
-        const isUpcoming = (wizard.detectedStartTime || 0) > Math.floor(Date.now() / 1000);
-        await ctx.reply("Please select your timing preference using the buttons below:", {
-          parse_mode: "HTML",
-          reply_markup: getSnipeTimingKeyboard(isUpcoming),
-        });
+        const isUpcoming =
+          (wizard.detectedStartTime || 0) > Math.floor(Date.now() / 1000);
+        await ctx.reply(
+          "Please select your timing preference using the buttons below:",
+          {
+            parse_mode: "HTML",
+            reply_markup: getSnipeTimingKeyboard(isUpcoming),
+          },
+        );
       }
       break;
     }
@@ -804,7 +760,10 @@ bot.on("message:text", async (ctx) => {
         return;
       }
 
-      if (wizard.detectedEndTime && scheduledDate.getTime() > wizard.detectedEndTime * 1000) {
+      if (
+        wizard.detectedEndTime &&
+        scheduledDate.getTime() > wizard.detectedEndTime * 1000
+      ) {
         await ctx.reply(
           `⚠️ Note: The target time is after the detected mint end (${new Date(wizard.detectedEndTime * 1000).toISOString()}).\n` +
             `Please provide a time during the active drop window.`,
@@ -957,10 +916,20 @@ async function showSnipeSummary(ctx: Context, sess: UserSession) {
 
   let timingText = "";
   if (wizard.timingMode === "mint_start") {
-    const waitSec = Math.max(0, Math.ceil((new Date(wizard.scheduledTime!).getTime() - Date.now()) / 1000));
+    const waitSec = Math.max(
+      0,
+      Math.ceil(
+        (new Date(wizard.scheduledTime!).getTime() - Date.now()) / 1000,
+      ),
+    );
     timingText = `⚡ Exactly When Mint Starts (T-0: ${wizard.scheduledTime} — in ${formatDuration(waitSec)})`;
   } else if (wizard.timingMode === "specific_time") {
-    const waitSec = Math.max(0, Math.ceil((new Date(wizard.scheduledTime!).getTime() - Date.now()) / 1000));
+    const waitSec = Math.max(
+      0,
+      Math.ceil(
+        (new Date(wizard.scheduledTime!).getTime() - Date.now()) / 1000,
+      ),
+    );
     timingText = `⏰ Specific Mint Time (${wizard.scheduledTime} — in ${formatDuration(waitSec)})`;
   } else {
     timingText = "🚀 Immediate (Live Now)";
@@ -1091,14 +1060,11 @@ async function executeConfirmedSnipe(
         ? "🎉 <b>Snipe Confirmed Successfully!</b>"
         : "⚠️ <b>Snipe Execution Finished</b>";
 
-      await ctx.reply(
-        `${outcomeHeader}\n\n` + resultLines.join("\n\n"),
-        {
-          parse_mode: "HTML",
-          reply_markup: getStatusKeyboard(),
-          link_preview_options: { is_disabled: true },
-        },
-      );
+      await ctx.reply(`${outcomeHeader}\n\n` + resultLines.join("\n\n"), {
+        parse_mode: "HTML",
+        reply_markup: getStatusKeyboard(),
+        link_preview_options: { is_disabled: true },
+      });
     } catch (err: any) {
       activeSnipe.status = "failed";
       await ctx.reply(`❌ <b>Snipe failed:</b> ${esc(err.message)}`, {
@@ -1129,73 +1095,78 @@ async function executeConfirmedSnipe(
       },
     );
 
-    const timeoutId = setTimeout(async () => {
-      activeSnipe.status = "firing";
-      try {
-        if (ctx.chat) {
-          await ctx.api.sendMessage(
-            ctx.chat.id,
-            `⏰ <b>Target window arrived! Firing up to 3 sequential snipe attempts...</b>`,
-            { parse_mode: "HTML" },
+    const timeoutId = setTimeout(
+      async () => {
+        activeSnipe.status = "firing";
+        try {
+          if (ctx.chat) {
+            await ctx.api.sendMessage(
+              ctx.chat.id,
+              `⏰ <b>Target window arrived! Firing up to 3 sequential snipe attempts...</b>`,
+              { parse_mode: "HTML" },
+            );
+          }
+
+          const results = await executeSnipe(
+            sess.wallets.map((w) => decryptWallet(w)),
+            plan,
+            rpcUrls,
+            maxFee,
+            maxTip,
+            250_000,
+            BigInt(chain?.chainId || DEFAULT_CHAIN.chainId),
+            (log) => sess.logs.push(log),
+            3,
           );
+
+          activeSnipe.txHashes = results.map((r) => r.txHash);
+          const isAnyConfirmed = results.some((r) => r.status === "confirmed");
+          activeSnipe.status = isAnyConfirmed ? "completed" : "failed";
+
+          if (ctx.chat) {
+            const resultLines = results.map((r) => {
+              const icon =
+                r.status === "confirmed"
+                  ? "✅"
+                  : r.status === "failed"
+                    ? "❌"
+                    : "⏳";
+              const addr = r.address.slice(0, 10) + "...";
+              return `${icon} ${code(addr)} — ${link("TX", r.explorerUrl)}`;
+            });
+
+            const header = isAnyConfirmed
+              ? `🎉 <b>Scheduled Snipe Confirmed!</b>`
+              : `⚠️ <b>Scheduled Snipe Completed</b>`;
+
+            await ctx.api.sendMessage(
+              ctx.chat.id,
+              `${header}\n\n` + resultLines.join("\n"),
+              {
+                parse_mode: "HTML",
+                reply_markup: getStatusKeyboard(),
+                link_preview_options: { is_disabled: true },
+              },
+            );
+          }
+        } catch (err: any) {
+          activeSnipe.status = "failed";
+          if (ctx.chat) {
+            await ctx.api.sendMessage(
+              ctx.chat.id,
+              `❌ <b>Scheduled snipe failed:</b> ${esc(err.message)}`,
+              {
+                parse_mode: "HTML",
+                reply_markup: getMainMenuKeyboard(
+                  Boolean(sess.settings.customRpc),
+                ),
+              },
+            );
+          }
         }
-
-        const results = await executeSnipe(
-          sess.wallets.map((w) => decryptWallet(w)),
-          plan,
-          rpcUrls,
-          maxFee,
-          maxTip,
-          250_000,
-          BigInt(chain?.chainId || DEFAULT_CHAIN.chainId),
-          (log) => sess.logs.push(log),
-          3,
-        );
-
-        activeSnipe.txHashes = results.map((r) => r.txHash);
-        const isAnyConfirmed = results.some((r) => r.status === "confirmed");
-        activeSnipe.status = isAnyConfirmed ? "completed" : "failed";
-
-        if (ctx.chat) {
-          const resultLines = results.map((r) => {
-            const icon =
-              r.status === "confirmed"
-                ? "✅"
-                : r.status === "failed"
-                  ? "❌"
-                  : "⏳";
-            const addr = r.address.slice(0, 10) + "...";
-            return `${icon} ${code(addr)} — ${link("TX", r.explorerUrl)}`;
-          });
-
-          const header = isAnyConfirmed
-            ? `🎉 <b>Scheduled Snipe Confirmed!</b>`
-            : `⚠️ <b>Scheduled Snipe Completed</b>`;
-
-          await ctx.api.sendMessage(
-            ctx.chat.id,
-            `${header}\n\n` + resultLines.join("\n"),
-            {
-              parse_mode: "HTML",
-              reply_markup: getStatusKeyboard(),
-              link_preview_options: { is_disabled: true },
-            },
-          );
-        }
-      } catch (err: any) {
-        activeSnipe.status = "failed";
-        if (ctx.chat) {
-          await ctx.api.sendMessage(
-            ctx.chat.id,
-            `❌ <b>Scheduled snipe failed:</b> ${esc(err.message)}`,
-            {
-              parse_mode: "HTML",
-              reply_markup: getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
-            },
-          );
-        }
-      }
-    }, Math.max(0, waitMs));
+      },
+      Math.max(0, waitMs),
+    );
 
     (activeSnipe as any)._timeoutId = timeoutId;
   }
@@ -1258,7 +1229,8 @@ async function promptSetRpc(ctx: Context & SessionFlavor<UserSession>) {
 
       let notice = "";
       if (!isAlchemyUrl(input)) {
-        notice = "\n\n💡 <i>Note: This does not look like an Alchemy URL, but it has been saved as your custom endpoint.</i>";
+        notice =
+          "\n\n💡 <i>Note: This does not look like an Alchemy URL, but it has been saved as your custom endpoint.</i>";
       }
 
       await msgCtx.reply(
