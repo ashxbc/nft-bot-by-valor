@@ -76,9 +76,13 @@ export interface UserSession {
     quantity?: number;
     maxFeePerGas?: string;
     maxPriorityFee?: string;
-    timingMode?: "now" | "scheduled";
+    timingMode?: "mint_start" | "specific_time" | "now";
     scheduledTime?: string;
     rpcUrl?: string;
+    detectedStartTime?: number;
+    detectedEndTime?: number;
+    mintPrice?: string;
+    maxTotalMintableByWallet?: number;
   };
   activeSnipes: ActiveSnipe[];
   logs: LogEntry[];
@@ -90,7 +94,7 @@ export interface ActiveSnipe {
   quantity: number;
   maxFeePerGas: string;
   maxPriorityFee: string;
-  timingMode: "now" | "scheduled";
+  timingMode: "mint_start" | "specific_time" | "now";
   scheduledTime?: Date;
   status:
     | "pending"
@@ -100,6 +104,7 @@ export interface ActiveSnipe {
     | "failed"
     | "cancelled";
   txHashes: string[];
+  attempts?: number;
   startedAt: Date;
   abortController?: AbortController;
 }

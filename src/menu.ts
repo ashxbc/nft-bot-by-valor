@@ -49,6 +49,23 @@ export function isAlchemyUrl(url: string): boolean {
   return url.toLowerCase().includes("alchemy.com");
 }
 
+/** Format seconds into human readable countdown (e.g. "2h 15m 30s") */
+export function formatDuration(seconds: number): string {
+  if (seconds <= 0) return "0s";
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+
+  const parts: string[] = [];
+  if (d > 0) parts.push(`${d}d`);
+  if (h > 0) parts.push(`${h}h`);
+  if (m > 0) parts.push(`${m}m`);
+  if (s > 0 || parts.length === 0) parts.push(`${s}s`);
+
+  return parts.join(" ");
+}
+
 export function getMainMenuKeyboard(hasRpc: boolean = true): InlineKeyboard {
   const kb = new InlineKeyboard();
 
@@ -123,18 +140,23 @@ export function getHelpKeyboard(): InlineKeyboard {
     .text("🔙 Main Menu", "menu_start");
 }
 
-export function getSnipeTimingKeyboard(): InlineKeyboard {
-  return new InlineKeyboard()
-    .text("⚡ Fire Immediately (Now)", "snipe_timing_now")
-    .row()
-    .text("⏰ Schedule Specific Mint Time", "snipe_timing_scheduled")
-    .row()
-    .text("❌ Cancel Wizard", "snipe_cancel_action");
+export function getSnipeTimingKeyboard(isUpcoming: boolean): InlineKeyboard {
+  const kb = new InlineKeyboard();
+
+  if (isUpcoming) {
+    kb.text("⚡ Exactly When Mint Starts (T-0)", "snipe_timing_start").row();
+  } else {
+    kb.text("🚀 Fire Immediately (Live Now)", "snipe_timing_now").row();
+  }
+
+  kb.text("⏰ Specific Time During Mint", "snipe_timing_custom").row();
+  kb.text("❌ Cancel Wizard", "snipe_cancel_action");
+  return kb;
 }
 
 export function getSnipeConfirmKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
-    .text("🚀 Confirm & Fire Snipe", "snipe_confirm_action")
+    .text("🚀 Confirm & Arm Snipe (3x Sequential)", "snipe_confirm_action")
     .row()
     .text("❌ Cancel Wizard", "snipe_cancel_action");
 }
@@ -158,7 +180,7 @@ export function renderStartText(sess: UserSession): string {
   const chain = resolveChain(sess.settings.activeChain);
   const walletCount = sess.walletAddresses.length;
   const activeSnipes = sess.activeSnipes.filter(
-    (s) => s.status === "pending" || s.status === "waiting",
+    (s) => s.status === "pending" || s.status === "waiting" || s.status === "firing",
   ).length;
 
   const hasRpc = Boolean(sess.settings.customRpc);
@@ -197,7 +219,7 @@ export function renderStartText(sess: UserSession): string {
     `  • Priority Fee: <code>${esc(sess.settings.maxPriorityFee)} Gwei</code>\n` +
     `  • Safety Cap: <b>${sess.settings.gasSafetyCap ? "ON ✅" : "OFF ❌"}</b>\n\n` +
     `👤 <b>Wallets:</b>\n  ${walletLines.replace(/\n/g, "\n  ")}\n\n` +
-    `🎯 <b>Active Snipes:</b> <code>${activeSnipes}</code>\n\n` +
+    `🎯 <b>Active Tasks:</b> <code>${activeSnipes}</code>\n\n` +
     `👇 <i>Use the interactive buttons below or Telegram command menu [/] to navigate:</i>`
   );
 }
@@ -248,9 +270,15 @@ export function renderStatusText(sess: UserSession): string {
           .map((s) => {
             const countdown =
               s.scheduledTime && s.status === "waiting"
-                ? ` ⏳ ${Math.max(0, Math.ceil((s.scheduledTime.getTime() - Date.now()) / 1000))}s left`
+                ? ` ⏳ ${formatDuration(Math.max(0, Math.ceil((s.scheduledTime.getTime() - Date.now()) / 1000)))} left`
                 : "";
-            return `  • ${esc(s.contractAddress.slice(0, 10) + "...")} | Qty: ${s.quantity} | <b>${esc(s.status)}</b>${countdown}`;
+            const modeLabel =
+              s.timingMode === "mint_start"
+                ? "T-0 Mint Start"
+                : s.timingMode === "specific_time"
+                  ? "Scheduled Time"
+                  : "Immediate";
+            return `  • ${esc(s.contractAddress.slice(0, 10) + "...")} | Qty: ${s.quantity} | <b>${esc(s.status)}</b> (${modeLabel})${countdown}`;
           })
           .join("\n");
 
@@ -290,16 +318,12 @@ export function renderStatusText(sess: UserSession): string {
 export function renderHelpText(): string {
   return (
     `❓ <b>SeaDrop Sniper Bot Guide</b>\n\n` +
-    `This bot allows you to snipe SeaDrop NFT public mints with zero delay directly from Telegram.\n\n` +
-    `<b>Alchemy RPC Setup:</b>\n` +
-    `1. Go to <a href="https://alchemy.com">alchemy.com</a> and sign up for free.\n` +
-    `2. Create an App for your target EVM network.\n` +
-    `3. Copy the HTTPS RPC URL (e.g. <code>https://...g.alchemy.com/v2/...</code>).\n` +
-    `4. Use <b>/set_rpc</b> or click <b>Set Alchemy RPC</b> in Settings to save it.\n\n` +
-    `<b>Key Features:</b>\n` +
-    `• <b>Pre-Signing & Blasting:</b> Transactions are pre-signed and blasted across RPCs at T-0.\n` +
-    `• <b>Encrypted Wallets:</b> Private keys are encrypted in-memory with AES-256-GCM.\n` +
-    `• <b>Scheduler:</b> Set exact mint timestamps to execute drops automatically.\n\n` +
+    `This bot automatically detects SeaDrop NFT mint schedules and snipes with ultra-fast sequential retry logic.\n\n` +
+    `<b>How Mint Scheduling & Sniping Works:</b>\n` +
+    `• <b>Automatic Detection:</b> Entering a contract address automatically inspects the on-chain start & end times.\n` +
+    `• <b>Timing Options:</b> Choose to snipe <b>Exactly when the mint starts (T-0)</b> or at a <b>Specific time during the mint</b>.\n` +
+    `• <b>Sequential 3x Firing:</b> When the target window arrives, fires up to 3 sequential transactions, stopping immediately upon first confirmation.\n` +
+    `• <b>Encrypted Wallets:</b> Private keys are encrypted in memory with AES-256-GCM.\n\n` +
     `<b>Available Commands:</b>\n` +
     `/start — Open the main dashboard\n` +
     `/set_rpc — Set or update your personal Alchemy RPC URL\n` +

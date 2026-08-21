@@ -28,6 +28,7 @@ import {
   link,
   maskRpcUrl,
   isAlchemyUrl,
+  formatDuration,
   getMainMenuKeyboard,
   getWalletsKeyboard,
   getSettingsKeyboard,
@@ -458,7 +459,25 @@ bot.callbackQuery("menu_snipe", async (ctx) => {
   await startSnipeWizard(ctx);
 });
 
-// Snipe: Step 5 Timing Selection (Now)
+// Snipe: Timing Option A — Exactly When Mint Starts (T-0)
+bot.callbackQuery("snipe_timing_start", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const sess = ctx.session;
+  if (!sess.snipeWizard) return;
+
+  const startSec = sess.snipeWizard.detectedStartTime;
+  if (startSec && startSec > Math.floor(Date.now() / 1000)) {
+    sess.snipeWizard.scheduledTime = new Date(startSec * 1000).toISOString();
+    sess.snipeWizard.timingMode = "mint_start";
+  } else {
+    sess.snipeWizard.timingMode = "now";
+  }
+
+  sess.snipeWizard.step = 6;
+  await showSnipeSummary(ctx, sess);
+});
+
+// Snipe: Timing Option B — Fire Immediately (Now)
 bot.callbackQuery("snipe_timing_now", async (ctx) => {
   await ctx.answerCallbackQuery();
   const sess = ctx.session;
@@ -469,17 +488,26 @@ bot.callbackQuery("snipe_timing_now", async (ctx) => {
   await showSnipeSummary(ctx, sess);
 });
 
-// Snipe: Step 5 Timing Selection (Scheduled)
-bot.callbackQuery("snipe_timing_scheduled", async (ctx) => {
+// Snipe: Timing Option C — Specific Time During Mint
+bot.callbackQuery("snipe_timing_custom", async (ctx) => {
   await ctx.answerCallbackQuery();
   const sess = ctx.session;
   if (!sess.snipeWizard) return;
 
   sess.snipeWizard.step = 51;
+  const startSec = sess.snipeWizard.detectedStartTime || Math.floor(Date.now() / 1000);
+  const endSec = sess.snipeWizard.detectedEndTime;
+
+  let windowInfo = "";
+  if (endSec) {
+    windowInfo = `\n<i>Mint Window: ${new Date(startSec * 1000).toISOString()} ➔ ${new Date(endSec * 1000).toISOString()}</i>\n`;
+  }
+
   await ctx.reply(
-    `⏰ <b>Scheduled Mint Time</b>\n\n` +
-      `Send the target mint time in ISO format or Unix timestamp.\n` +
-      `Example: ${code("2026-09-01T18:00:00Z")}`,
+    `⏰ <b>Set Specific Snipe Time</b>\n` +
+      windowInfo +
+      `\nSend your target execution time in ISO format or Unix timestamp.\n` +
+      `Example: ${code(new Date(Date.now() + 1800_000).toISOString())}`,
     { parse_mode: "HTML" },
   );
 });
@@ -517,7 +545,9 @@ bot.on("message:text", async (ctx) => {
   switch (wizard.step) {
     case 1: {
       if (!isAddress(text)) {
-        await ctx.reply("❌ Invalid address. Send a valid 0x contract address.");
+        await ctx.reply(
+          "❌ Invalid address. Send a valid 0x contract address.",
+        );
         return;
       }
       wizard.contractAddress = text;
@@ -536,24 +566,38 @@ bot.on("message:text", async (ctx) => {
         return;
       }
 
+      await ctx.reply("🔍 <i>Inspecting contract and detecting on-chain drop schedule...</i>", {
+        parse_mode: "HTML",
+      });
+
       const drop = await fetchPublicDrop(rpc, text);
       if (drop) {
+        const nowSec = Math.floor(Date.now() / 1000);
+        wizard.detectedStartTime = drop.startTime;
+        wizard.detectedEndTime = drop.endTime;
+        wizard.mintPrice = drop.mintPrice.toString();
+        wizard.maxTotalMintableByWallet = drop.maxTotalMintableByWallet;
+
+        const isUpcoming = drop.startTime > nowSec;
+        const statusText = isUpcoming
+          ? `⏰ <b>Starts in:</b> <b>${formatDuration(drop.startTime - nowSec)}</b> (${code(new Date(drop.startTime * 1000).toISOString())})`
+          : `🟢 <b>Status:</b> <b>LIVE NOW</b> (Ends in ${formatDuration(Math.max(0, drop.endTime - nowSec))})`;
+
         await ctx.reply(
-          `✅ <b>SeaDrop Public Drop Found!</b>\n\n` +
-            `Price: ${code(formatEther(drop.mintPrice) + " ETH")}\n` +
-            `Max per wallet: ${drop.maxTotalMintableByWallet}\n` +
-            `Starts: ${code(new Date(drop.startTime * 1000).toISOString())}\n` +
-            `Ends: ${code(new Date(drop.endTime * 1000).toISOString())}\n` +
-            `Fee BPS: ${drop.feeBps}\n\n` +
+          `✅ <b>SeaDrop Public Drop Detected!</b>\n\n` +
+            `• <b>Price:</b> ${code(formatEther(drop.mintPrice) + " ETH")}\n` +
+            `• <b>Wallet Limit:</b> <code>${drop.maxTotalMintableByWallet}</code> NFTs\n` +
+            `• ${statusText}\n` +
+            `• <b>Window:</b> ${code(new Date(drop.startTime * 1000).toISOString())} ➔ ${code(new Date(drop.endTime * 1000).toISOString())}\n\n` +
             `Step 2/6: <b>Mint Quantity</b>\n` +
             `How many NFTs per wallet? (1–${drop.maxTotalMintableByWallet})`,
           { parse_mode: "HTML" },
         );
       } else {
         await ctx.reply(
-          `⚠️ Could not fetch drop info (may not be SeaDrop or network issue).\n\n` +
+          `⚠️ <i>Could not automatically read SeaDrop drop info (custom or uninitialized stage).</i>\n\n` +
             `Step 2/6: <b>Mint Quantity</b>\n` +
-            `How many NFTs per wallet?`,
+            `How many NFTs per wallet? (1–10)`,
           { parse_mode: "HTML" },
         );
       }
@@ -562,8 +606,9 @@ bot.on("message:text", async (ctx) => {
 
     case 2: {
       const qty = parseInt(text, 10);
-      if (isNaN(qty) || qty < 1 || qty > 100) {
-        await ctx.reply("❌ Enter a valid quantity (1-100).");
+      const maxAllowed = wizard.maxTotalMintableByWallet || 100;
+      if (isNaN(qty) || qty < 1 || qty > maxAllowed) {
+        await ctx.reply(`❌ Enter a valid quantity (1-${maxAllowed}).`);
         return;
       }
       wizard.quantity = qty;
@@ -604,9 +649,7 @@ bot.on("message:text", async (ctx) => {
 
     case 4: {
       const tip =
-        text.toLowerCase() === "default"
-          ? sess.settings.maxPriorityFee
-          : text;
+        text.toLowerCase() === "default" ? sess.settings.maxPriorityFee : text;
       const parsed = parseFloat(tip);
       if (isNaN(parsed) || parsed <= 0) {
         await ctx.reply("❌ Enter a valid tip in Gwei, or send 'default'.");
@@ -615,34 +658,67 @@ bot.on("message:text", async (ctx) => {
       wizard.maxPriorityFee = tip;
       wizard.step = 5;
 
+      const nowSec = Math.floor(Date.now() / 1000);
+      const startSec = wizard.detectedStartTime || 0;
+      const endSec = wizard.detectedEndTime || 0;
+      const isUpcoming = startSec > nowSec;
+
+      let scheduleBanner = "";
+      if (isUpcoming) {
+        scheduleBanner =
+          `⏰ <b>Scheduled Mint Start:</b> ${code(new Date(startSec * 1000).toISOString())}\n` +
+          `⏳ <b>Countdown:</b> <b>${formatDuration(startSec - nowSec)}</b> from now\n` +
+          `🏁 <b>Mint Window Ends:</b> ${code(new Date(endSec * 1000).toISOString())}\n\n`;
+      } else if (endSec > nowSec) {
+        scheduleBanner =
+          `🟢 <b>Mint is LIVE NOW!</b>\n` +
+          `🏁 <b>Mint Window Ends:</b> ${code(new Date(endSec * 1000).toISOString())} (${formatDuration(endSec - nowSec)} left)\n\n`;
+      }
+
       await ctx.reply(
-        `Step 5/6: <b>Timing Mode</b>\n\n` +
-          `Choose when to execute this mint:`,
+        `Step 5/6: <b>Timing & Execution Window</b>\n\n` +
+          scheduleBanner +
+          `<b>When would you like to snipe?</b>\n` +
+          `• <i>Exactly when mint starts (T-0)</i>: Arms the bot to fire right at opening.\n` +
+          `• <i>Specific time during mint</i>: Choose your own execution timestamp.\n\n` +
+          `👇 <i>Select an option below:</i>`,
         {
           parse_mode: "HTML",
-          reply_markup: getSnipeTimingKeyboard(),
+          reply_markup: getSnipeTimingKeyboard(isUpcoming),
         },
       );
       break;
     }
 
     case 5: {
-      if (text.toLowerCase() === "now") {
+      const lower = text.toLowerCase();
+      if (lower === "start" || lower === "t0" || lower === "t-0") {
+        const startSec = wizard.detectedStartTime;
+        if (startSec && startSec > Math.floor(Date.now() / 1000)) {
+          wizard.scheduledTime = new Date(startSec * 1000).toISOString();
+          wizard.timingMode = "mint_start";
+        } else {
+          wizard.timingMode = "now";
+        }
+        wizard.step = 6;
+        await showSnipeSummary(ctx, sess);
+      } else if (lower === "now") {
         wizard.timingMode = "now";
         wizard.step = 6;
         await showSnipeSummary(ctx, sess);
-      } else if (text.toLowerCase() === "scheduled") {
+      } else if (lower === "custom" || lower === "scheduled" || lower === "specific") {
         wizard.step = 51;
         await ctx.reply(
-          `⏰ <b>Scheduled Mint Time</b>\n\n` +
+          `⏰ <b>Set Specific Snipe Time</b>\n\n` +
             `Send the target mint time in ISO format or Unix timestamp.\n` +
-            `Example: ${code("2026-09-01T18:00:00Z")}`,
+            `Example: ${code(new Date(Date.now() + 1800_000).toISOString())}`,
           { parse_mode: "HTML" },
         );
       } else {
-        await ctx.reply("Please select timing mode below:", {
+        const isUpcoming = (wizard.detectedStartTime || 0) > Math.floor(Date.now() / 1000);
+        await ctx.reply("Please select your timing preference using the buttons below:", {
           parse_mode: "HTML",
-          reply_markup: getSnipeTimingKeyboard(),
+          reply_markup: getSnipeTimingKeyboard(isUpcoming),
         });
       }
       break;
@@ -660,7 +736,7 @@ bot.on("message:text", async (ctx) => {
 
       if (isNaN(scheduledDate.getTime())) {
         await ctx.reply(
-          "❌ Invalid time. Try ISO format like '2026-09-01T18:00:00Z'",
+          "❌ Invalid time format. Try ISO format like '2026-09-01T18:00:00Z'",
         );
         return;
       }
@@ -670,8 +746,16 @@ bot.on("message:text", async (ctx) => {
         return;
       }
 
+      if (wizard.detectedEndTime && scheduledDate.getTime() > wizard.detectedEndTime * 1000) {
+        await ctx.reply(
+          `⚠️ Note: The target time is after the detected mint end (${new Date(wizard.detectedEndTime * 1000).toISOString()}).\n` +
+            `Please provide a time during the active drop window.`,
+        );
+        return;
+      }
+
       wizard.scheduledTime = scheduledDate.toISOString();
-      wizard.timingMode = "scheduled";
+      wizard.timingMode = "specific_time";
       wizard.step = 6;
       await showSnipeSummary(ctx, sess);
       break;
@@ -699,7 +783,9 @@ async function promptAddWallet(ctx: Context & SessionFlavor<UserSession>) {
 
     if (msgCtx.message.text === "/cancel_w") {
       await msgCtx.reply("❌ Cancelled adding wallet.", {
-        reply_markup: getWalletsKeyboard(ctx.session.walletAddresses.length > 0),
+        reply_markup: getWalletsKeyboard(
+          ctx.session.walletAddresses.length > 0,
+        ),
       });
       return;
     }
@@ -724,14 +810,18 @@ async function promptAddWallet(ctx: Context & SessionFlavor<UserSession>) {
       await msgCtx.reply(
         `❌ <b>Invalid private key:</b> ${esc(err.message || "Could not parse key")}`,
         {
-          reply_markup: getWalletsKeyboard(ctx.session.walletAddresses.length > 0),
+          reply_markup: getWalletsKeyboard(
+            ctx.session.walletAddresses.length > 0,
+          ),
         },
       );
     }
   });
 }
 
-async function displayWalletBalances(ctx: Context & SessionFlavor<UserSession>) {
+async function displayWalletBalances(
+  ctx: Context & SessionFlavor<UserSession>,
+) {
   const sess = ctx.session;
 
   if (sess.walletAddresses.length === 0) {
@@ -796,7 +886,7 @@ async function startSnipeWizard(ctx: Context & SessionFlavor<UserSession>) {
   await ctx.reply(
     `🎯 <b>SeaDrop Snipe Wizard</b>\n\n` +
       `Step 1/6: <b>Contract Address</b>\n` +
-      `Send the NFT contract address (<code>0x...</code>).`,
+      `Send the NFT contract address (<code>0x...</code>) to detect the mint schedule:`,
     {
       parse_mode: "HTML",
     },
@@ -807,10 +897,16 @@ async function showSnipeSummary(ctx: Context, sess: UserSession) {
   const wizard = sess.snipeWizard!;
   const chain = resolveChain(sess.settings.activeChain);
 
-  const timingText =
-    wizard.timingMode === "now"
-      ? "🚀 Fire Immediately (Now)"
-      : `⏰ Scheduled: ${wizard.scheduledTime}`;
+  let timingText = "";
+  if (wizard.timingMode === "mint_start") {
+    const waitSec = Math.max(0, Math.ceil((new Date(wizard.scheduledTime!).getTime() - Date.now()) / 1000));
+    timingText = `⚡ Exactly When Mint Starts (T-0: ${wizard.scheduledTime} — in ${formatDuration(waitSec)})`;
+  } else if (wizard.timingMode === "specific_time") {
+    const waitSec = Math.max(0, Math.ceil((new Date(wizard.scheduledTime!).getTime() - Date.now()) / 1000));
+    timingText = `⏰ Specific Mint Time (${wizard.scheduledTime} — in ${formatDuration(waitSec)})`;
+  } else {
+    timingText = "🚀 Immediate (Live Now)";
+  }
 
   const rpcDisplay = sess.settings.customRpc
     ? `Alchemy Dedicated (${maskRpcUrl(sess.settings.customRpc)})`
@@ -822,11 +918,12 @@ async function showSnipeSummary(ctx: Context, sess: UserSession) {
     `• <b>Quantity:</b> <code>${wizard.quantity}</code> per wallet\n` +
     `• <b>Max Fee:</b> <code>${esc(wizard.maxFeePerGas!)} Gwei</code>\n` +
     `• <b>Priority Fee:</b> <code>${esc(wizard.maxPriorityFee!)} Gwei</code>\n` +
-    `• <b>Timing:</b> ${esc(timingText)}\n` +
-    `• <b>Wallets:</b> <code>${sess.walletAddresses.length}</code>\n` +
+    `• <b>Timing Mode:</b> ${esc(timingText)}\n` +
+    `• <b>Execution Strategy:</b> 🔄 <b>Up to 3 sequential attempts</b> (stops immediately on 1st success)\n` +
+    `• <b>Wallets:</b> <code>${sess.walletAddresses.length}</code> loaded\n` +
     `• <b>RPC Endpoint:</b> ${code(rpcDisplay)}\n` +
     `• <b>Network:</b> ${esc(chain?.name || "Robinhood Chain")}\n\n` +
-    `<i>Click below to confirm and start:</i>`;
+    `<i>Click below to confirm and arm your snipe:</i>`;
 
   await ctx.reply(text, {
     parse_mode: "HTML",
@@ -834,14 +931,19 @@ async function showSnipeSummary(ctx: Context, sess: UserSession) {
   });
 }
 
-async function executeConfirmedSnipe(ctx: Context & SessionFlavor<UserSession>) {
+async function executeConfirmedSnipe(
+  ctx: Context & SessionFlavor<UserSession>,
+) {
   const sess = ctx.session;
   const wizard = sess.snipeWizard;
 
   if (!wizard || wizard.step !== 6 || !wizard.contractAddress) {
-    await ctx.reply("⚠️ No snipe to confirm. Click below to start a new snipe:", {
-      reply_markup: getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
-    });
+    await ctx.reply(
+      "⚠️ No snipe to confirm. Click below to start a new snipe:",
+      {
+        reply_markup: getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
+      },
+    );
     return;
   }
 
@@ -860,7 +962,7 @@ async function executeConfirmedSnipe(ctx: Context & SessionFlavor<UserSession>) 
   );
   if (!plan) {
     await ctx.reply(
-      "❌ Could not build mint plan. Contract may not be a SeaDrop collection.",
+      "❌ Could not build mint plan. Contract may not be an active SeaDrop collection.",
       {
         reply_markup: getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
       },
@@ -873,6 +975,8 @@ async function executeConfirmedSnipe(ctx: Context & SessionFlavor<UserSession>) 
   const maxTip = parseUnits(wizard.maxPriorityFee!, "gwei");
 
   const snipeId = `snipe_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const isImmediate = wizard.timingMode === "now" || !wizard.scheduledTime;
+
   const activeSnipe: ActiveSnipe = {
     id: snipeId,
     contractAddress: wizard.contractAddress,
@@ -883,7 +987,7 @@ async function executeConfirmedSnipe(ctx: Context & SessionFlavor<UserSession>) 
     scheduledTime: wizard.scheduledTime
       ? new Date(wizard.scheduledTime)
       : undefined,
-    status: wizard.timingMode === "now" ? "firing" : "waiting",
+    status: isImmediate ? "firing" : "waiting",
     txHashes: [],
     startedAt: new Date(),
   };
@@ -891,8 +995,8 @@ async function executeConfirmedSnipe(ctx: Context & SessionFlavor<UserSession>) 
   sess.activeSnipes.push(activeSnipe);
   sess.snipeWizard = undefined;
 
-  if (wizard.timingMode === "now") {
-    await ctx.reply("🚀 <b>Firing immediately to RPCs...</b>", {
+  if (isImmediate) {
+    await ctx.reply("🚀 <b>Firing sequential snipe (up to 3 attempts)...</b>", {
       parse_mode: "HTML",
     });
 
@@ -906,10 +1010,12 @@ async function executeConfirmedSnipe(ctx: Context & SessionFlavor<UserSession>) 
         250_000,
         BigInt(chain?.chainId || DEFAULT_CHAIN.chainId),
         (log) => sess.logs.push(log),
+        3,
       );
 
       activeSnipe.txHashes = results.map((r) => r.txHash);
-      activeSnipe.status = "completed";
+      const isAnyConfirmed = results.some((r) => r.status === "confirmed");
+      activeSnipe.status = isAnyConfirmed ? "completed" : "failed";
 
       const resultLines = results.map((r) => {
         const icon =
@@ -918,13 +1024,17 @@ async function executeConfirmedSnipe(ctx: Context & SessionFlavor<UserSession>) 
         const txLabel = r.txHash.slice(0, 16) + "...";
         let line = `${icon} ${code(addr)}\n  TX: ${link(txLabel, r.explorerUrl)}`;
         if (r.blockNumber) {
-          line += `\n  Block: ${r.blockNumber} | Gas: ${r.gasUsed}`;
+          line += `\n  Block: ${r.blockNumber} | Status: <b>${r.status.toUpperCase()}</b> | Gas: ${r.gasUsed}`;
         }
         return line;
       });
 
+      const outcomeHeader = isAnyConfirmed
+        ? "🎉 <b>Snipe Confirmed Successfully!</b>"
+        : "⚠️ <b>Snipe Execution Finished</b>";
+
       await ctx.reply(
-        `📊 <b>Snipe Results</b>\n\n` + resultLines.join("\n\n"),
+        `${outcomeHeader}\n\n` + resultLines.join("\n\n"),
         {
           parse_mode: "HTML",
           reply_markup: getStatusKeyboard(),
@@ -939,15 +1049,22 @@ async function executeConfirmedSnipe(ctx: Context & SessionFlavor<UserSession>) 
       });
     }
   } else {
-    // Scheduled
+    // Scheduled for start time or specific custom time
     const scheduledTime = new Date(wizard.scheduledTime!);
     const waitMs = scheduledTime.getTime() - Date.now();
 
+    const modeTitle =
+      wizard.timingMode === "mint_start"
+        ? "⚡ Mint Start (T-0)"
+        : "⏰ Specific Time";
+
     await ctx.reply(
-      `⏰ <b>Scheduled Snipe Active!</b>\n\n` +
-        `Will fire at: <code>${esc(scheduledTime.toISOString())}</code>\n` +
-        `Waiting: <b>${Math.ceil(waitMs / 1000)}s</b>\n\n` +
-        `Use /cancel or the button below to abort before it fires.`,
+      `🎯 <b>Snipe Armed & Scheduled!</b>\n\n` +
+        `• <b>Mode:</b> ${esc(modeTitle)}\n` +
+        `• <b>Target Time:</b> <code>${esc(scheduledTime.toISOString())}</code>\n` +
+        `• <b>Waiting:</b> <b>${formatDuration(Math.max(0, Math.ceil(waitMs / 1000)))}</b>\n` +
+        `• <b>Strategy:</b> Up to 3 sequential attempts (stops immediately on confirmation)\n\n` +
+        `<i>Bot will automatically blast transactions when the window arrives. Use /cancel to abort.</i>`,
       {
         parse_mode: "HTML",
         reply_markup: getStatusKeyboard(),
@@ -957,6 +1074,14 @@ async function executeConfirmedSnipe(ctx: Context & SessionFlavor<UserSession>) 
     const timeoutId = setTimeout(async () => {
       activeSnipe.status = "firing";
       try {
+        if (ctx.chat) {
+          await ctx.api.sendMessage(
+            ctx.chat.id,
+            `⏰ <b>Target window arrived! Firing up to 3 sequential snipe attempts...</b>`,
+            { parse_mode: "HTML" },
+          );
+        }
+
         const results = await executeSnipe(
           sess.wallets.map((w) => decryptWallet(w)),
           plan,
@@ -966,10 +1091,12 @@ async function executeConfirmedSnipe(ctx: Context & SessionFlavor<UserSession>) 
           250_000,
           BigInt(chain?.chainId || DEFAULT_CHAIN.chainId),
           (log) => sess.logs.push(log),
+          3,
         );
 
         activeSnipe.txHashes = results.map((r) => r.txHash);
-        activeSnipe.status = "completed";
+        const isAnyConfirmed = results.some((r) => r.status === "confirmed");
+        activeSnipe.status = isAnyConfirmed ? "completed" : "failed";
 
         if (ctx.chat) {
           const resultLines = results.map((r) => {
@@ -983,9 +1110,13 @@ async function executeConfirmedSnipe(ctx: Context & SessionFlavor<UserSession>) 
             return `${icon} ${code(addr)} — ${link("TX", r.explorerUrl)}`;
           });
 
+          const header = isAnyConfirmed
+            ? `🎉 <b>Scheduled Snipe Confirmed!</b>`
+            : `⚠️ <b>Scheduled Snipe Completed</b>`;
+
           await ctx.api.sendMessage(
             ctx.chat.id,
-            `🚀 <b>Scheduled Snipe Fired!</b>\n\n` + resultLines.join("\n"),
+            `${header}\n\n` + resultLines.join("\n"),
             {
               parse_mode: "HTML",
               reply_markup: getStatusKeyboard(),
@@ -1006,7 +1137,7 @@ async function executeConfirmedSnipe(ctx: Context & SessionFlavor<UserSession>) 
           );
         }
       }
-    }, waitMs);
+    }, Math.max(0, waitMs));
 
     (activeSnipe as any)._timeoutId = timeoutId;
   }

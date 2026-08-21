@@ -23,18 +23,20 @@ export interface MintResult {
   explorerUrl: string;
 }
 
-// Resolve RPC URLs: custom > env default > chain defaults
+// Resolve RPC URLs: user custom Alchemy RPC > additional backup RPCs > default fallback
 export function resolveRpcUrls(
   customRpc: string,
   additionalRpcEnv: string,
 ): string[] {
   const urls: string[] = [];
   if (customRpc) urls.push(customRpc);
-  const defaultRpc =
-    process.env.DEFAULT_RPC_URL || "https://rpc.mainnet.chain.robinhood.com";
-  urls.push(defaultRpc);
   if (additionalRpcEnv) {
     urls.push(...additionalRpcEnv.split(",").filter(Boolean));
+  }
+  const defaultRpc =
+    process.env.DEFAULT_RPC_URL || "https://rpc.mainnet.chain.robinhood.com";
+  if (!urls.includes(defaultRpc)) {
+    urls.push(defaultRpc);
   }
   return [...new Set(urls)];
 }
@@ -198,7 +200,7 @@ export async function waitForReceipt(
   return null;
 }
 
-// Execute a full snipe: sign → blast → wait for receipts
+// Execute sequential snipe with up to maxAttempts (default 3), stopping immediately on first confirmation
 export async function executeSnipe(
   walletKeys: string[],
   plan: MintPlan,
@@ -208,84 +210,132 @@ export async function executeSnipe(
   gasLimit: number,
   chainId: bigint,
   onLog: (log: LogEntry) => void,
+  maxAttempts: number = 3,
 ): Promise<MintResult[]> {
-  onLog({
-    timestamp: new Date(),
-    message: `Signing transactions for ${walletKeys.length} wallet(s)...`,
-    type: "info",
-  });
+  const allResults: MintResult[] = [];
+  let confirmed = false;
 
-  const { prepared, chainId: liveChainId } = await signTransactions(
-    walletKeys,
-    plan,
-    rpcUrls[0],
-    maxFeePerGas,
-    maxPriorityFee,
-    gasLimit,
-  );
-
-  onLog({
-    timestamp: new Date(),
-    message: `✓ ${prepared.length} tx(s) signed — calldata: ${(plan.data.length - 2) / 2} bytes`,
-    type: "success",
-  });
-
-  onLog({
-    timestamp: new Date(),
-    message: `🚀 Firing to ${rpcUrls.length} RPC endpoint(s)...`,
-    type: "info",
-  });
-
-  const results = await blastTransactions(prepared, rpcUrls, liveChainId);
-
-  for (const r of results) {
-    if (r.status === "dispatched") {
-      onLog({
-        timestamp: new Date(),
-        message: `[${r.address.slice(0, 10)}...] TX: ${r.txHash}`,
-        type: "success",
-      });
-    } else {
-      onLog({
-        timestamp: new Date(),
-        message: `[${r.address.slice(0, 10)}...] REJECTED: ${r.error}`,
-        type: "error",
-      });
-    }
-  }
-
-  // Wait for receipts on accepted transactions
-  const dispatched = results.filter((r) => r.status === "dispatched");
-  if (dispatched.length > 0) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     onLog({
       timestamp: new Date(),
-      message: `Waiting for receipts...`,
+      message: `[Attempt ${attempt}/${maxAttempts}] Signing & preparing ${walletKeys.length} wallet transaction(s)...`,
       type: "info",
     });
 
-    await Promise.all(
-      dispatched.map(async (r) => {
-        const receipt = await waitForReceipt(r.txHash, rpcUrls[0], 60_000);
-        if (receipt) {
-          r.status = receipt.status === "SUCCESS" ? "confirmed" : "failed";
-          r.blockNumber = receipt.block;
-          r.gasUsed = receipt.gasUsed;
-          onLog({
-            timestamp: new Date(),
-            message: `[${r.address.slice(0, 10)}...] Block: ${receipt.block} | ${receipt.status} | Gas: ${receipt.gasUsed}`,
-            type: receipt.status === "SUCCESS" ? "success" : "error",
-          });
-        } else {
-          r.status = "timeout";
-          onLog({
-            timestamp: new Date(),
-            message: `[${r.address.slice(0, 10)}...] TIMEOUT — check explorer`,
-            type: "warning",
-          });
-        }
-      }),
-    );
+    let preparedData;
+    try {
+      preparedData = await signTransactions(
+        walletKeys,
+        plan,
+        rpcUrls[0],
+        maxFeePerGas,
+        maxPriorityFee,
+        gasLimit,
+      );
+    } catch (err: any) {
+      onLog({
+        timestamp: new Date(),
+        message: `[Attempt ${attempt}/${maxAttempts}] ❌ Signing failed: ${err.message}`,
+        type: "error",
+      });
+      if (attempt < maxAttempts) {
+        await new Promise((r) => setTimeout(r, 1000));
+        continue;
+      }
+      break;
+    }
+
+    const { prepared, chainId: liveChainId } = preparedData;
+
+    onLog({
+      timestamp: new Date(),
+      message: `[Attempt ${attempt}/${maxAttempts}] 🚀 Blasting to ${rpcUrls.length} RPC endpoint(s)...`,
+      type: "info",
+    });
+
+    const results = await blastTransactions(prepared, rpcUrls, liveChainId);
+    allResults.push(...results);
+
+    for (const r of results) {
+      if (r.status === "dispatched") {
+        onLog({
+          timestamp: new Date(),
+          message: `[Attempt ${attempt}/${maxAttempts}] [${r.address.slice(0, 10)}...] TX: ${r.txHash}`,
+          type: "success",
+        });
+      } else {
+        onLog({
+          timestamp: new Date(),
+          message: `[Attempt ${attempt}/${maxAttempts}] [${r.address.slice(0, 10)}...] REJECTED: ${r.error}`,
+          type: "error",
+        });
+      }
+    }
+
+    // Wait for receipts on accepted transactions (20s timeout per attempt)
+    const dispatched = results.filter((r) => r.status === "dispatched");
+    if (dispatched.length > 0) {
+      onLog({
+        timestamp: new Date(),
+        message: `[Attempt ${attempt}/${maxAttempts}] Checking on-chain receipt...`,
+        type: "info",
+      });
+
+      const receiptStatuses = await Promise.all(
+        dispatched.map(async (r) => {
+          const receipt = await waitForReceipt(r.txHash, rpcUrls[0], 20_000);
+          if (receipt) {
+            r.status = receipt.status === "SUCCESS" ? "confirmed" : "failed";
+            r.blockNumber = receipt.block;
+            r.gasUsed = receipt.gasUsed;
+            onLog({
+              timestamp: new Date(),
+              message: `[Attempt ${attempt}/${maxAttempts}] [${r.address.slice(0, 10)}...] Block: ${receipt.block} | ${receipt.status} | Gas: ${receipt.gasUsed}`,
+              type: receipt.status === "SUCCESS" ? "success" : "error",
+            });
+            return receipt.status === "SUCCESS";
+          } else {
+            r.status = "timeout";
+            onLog({
+              timestamp: new Date(),
+              message: `[Attempt ${attempt}/${maxAttempts}] [${r.address.slice(0, 10)}...] Timeout waiting for confirmation.`,
+              type: "warning",
+            });
+            return false;
+          }
+        }),
+      );
+
+      // If at least one transaction confirmed successfully, STOP IMMEDIATELY!
+      if (receiptStatuses.some(Boolean)) {
+        confirmed = true;
+        onLog({
+          timestamp: new Date(),
+          message: `🎯 SUCCESS on attempt ${attempt}/${maxAttempts}! Stopping further retry attempts.`,
+          type: "success",
+        });
+        return results;
+      }
+    }
+
+    if (attempt < maxAttempts) {
+      onLog({
+        timestamp: new Date(),
+        message: `⚠️ Attempt ${attempt}/${maxAttempts} did not confirm. Firing attempt ${attempt + 1}/${maxAttempts} sequentially...`,
+        type: "warning",
+      });
+      // Short breather before next sequential attempt
+      await new Promise((r) => setTimeout(r, 1000));
+    }
   }
 
-  return results;
+  if (!confirmed) {
+    onLog({
+      timestamp: new Date(),
+      message: `❌ Completed all ${maxAttempts} sequential attempts without confirmation.`,
+      type: "error",
+    });
+  }
+
+  return allResults.length > 0 ? allResults : [];
 }
