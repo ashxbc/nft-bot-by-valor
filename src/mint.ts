@@ -1,7 +1,7 @@
 // Transaction signing, multi-RPC blasting, and receipt polling.
-// Adapted from the original local-mint.ts for async Telegram bot execution.
+// Autonomous execution engine with instant verification and stop-on-success.
 
-import { JsonRpcProvider, Wallet, keccak256 } from "ethers";
+import { JsonRpcProvider, Wallet, keccak256, formatEther } from "ethers";
 import { MintPlan } from "./seadrop";
 import { LogEntry } from "./session";
 import { explorerTx } from "./chains";
@@ -10,6 +10,7 @@ export interface MintResult {
   walletIndex: number;
   address: string;
   txHash: string;
+  attempt: number;
   status:
     | "dispatched"
     | "accepted"
@@ -21,6 +22,15 @@ export interface MintResult {
   gasUsed?: string;
   error?: string;
   explorerUrl: string;
+}
+
+export interface SnipeExecutionReport {
+  confirmed: boolean;
+  successfulAttempt?: number;
+  attemptsRun: number;
+  results: MintResult[];
+  confirmedResult?: MintResult;
+  error?: string;
 }
 
 // Resolve RPC URLs: user custom Alchemy RPC > additional backup RPCs > default fallback
@@ -107,6 +117,7 @@ export async function blastTransactions(
   prepared: { address: string; rawTx: string; txHash: string }[],
   rpcUrls: string[],
   chainId: bigint,
+  attempt: number = 1,
 ): Promise<MintResult[]> {
   const results: MintResult[] = [];
 
@@ -145,11 +156,12 @@ export async function blastTransactions(
       walletIndex: prepared.indexOf(p),
       address: p.address,
       txHash: p.txHash,
+      attempt,
       status: accepted ? "dispatched" : "rejected",
       explorerUrl: explorerTx(chainId, p.txHash),
       error: accepted
         ? undefined
-        : "Rejected by all RPCs: " +
+        : "Rejected by RPCs: " +
           responses
             .filter(
               (r): r is PromiseFulfilledResult<any> => r.status === "fulfilled",
@@ -163,11 +175,11 @@ export async function blastTransactions(
   return results;
 }
 
-// Poll for transaction receipt
+// Fast poll for transaction receipt (polls every 500ms for instant confirmation)
 export async function waitForReceipt(
   txHash: string,
   rpcUrl: string,
-  timeoutMs: number = 60_000,
+  timeoutMs: number = 20_000,
 ): Promise<{ block: number; gasUsed: string; status: string } | null> {
   const start = Date.now();
 
@@ -186,7 +198,7 @@ export async function waitForReceipt(
       const json = (await res.json()) as any;
       const receipt = json.result;
 
-      if (receipt) {
+      if (receipt && receipt.blockNumber) {
         return {
           block: parseInt(receipt.blockNumber, 16),
           gasUsed: BigInt(receipt.gasUsed).toString(),
@@ -194,31 +206,41 @@ export async function waitForReceipt(
         };
       }
     } catch {}
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 500));
   }
 
   return null;
 }
 
-// Execute sequential snipe with up to maxAttempts (default 3), stopping immediately on first confirmation
+/**
+ * Fully Autonomous Snipe Execution Pipeline:
+ * 1. Fires Attempt 1 immediately when the mint window begins.
+ * 2. Immediately verifies receipt status.
+ * 3. If SUCCESS: terminates immediately, cancels remaining attempts, and returns confirmation report.
+ * 4. Only fires Attempt 2/3 if previous attempt genuinely failed (reverted, rejected, or timed out).
+ */
 export async function executeSnipe(
   walletKeys: string[],
   plan: MintPlan,
   rpcUrls: string[],
-  maxFeePerGas: bigint,
-  maxPriorityFee: bigint,
+  baseMaxFee: bigint,
+  basePriorityFee: bigint,
   gasLimit: number,
   chainId: bigint,
   onLog: (log: LogEntry) => void,
   maxAttempts: number = 3,
-): Promise<MintResult[]> {
+): Promise<SnipeExecutionReport> {
   const allResults: MintResult[] = [];
-  let confirmed = false;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    // Dynamic fee bumping on retries (+20% priority fee per retry attempt for fast replacement)
+    const multiplier = BigInt(Math.floor(100 + (attempt - 1) * 20));
+    const currentMaxFee = (baseMaxFee * multiplier) / 100n;
+    const currentPriorityFee = (basePriorityFee * multiplier) / 100n;
+
     onLog({
       timestamp: new Date(),
-      message: `[Attempt ${attempt}/${maxAttempts}] Signing & preparing ${walletKeys.length} wallet transaction(s)...`,
+      message: `[Attempt ${attempt}/${maxAttempts}] Signing transactions for ${walletKeys.length} wallet(s)...`,
       type: "info",
     });
 
@@ -228,8 +250,8 @@ export async function executeSnipe(
         walletKeys,
         plan,
         rpcUrls[0],
-        maxFeePerGas,
-        maxPriorityFee,
+        currentMaxFee,
+        currentPriorityFee,
         gasLimit,
       );
     } catch (err: any) {
@@ -239,10 +261,20 @@ export async function executeSnipe(
         type: "error",
       });
       if (attempt < maxAttempts) {
-        await new Promise((r) => setTimeout(r, 1000));
+        onLog({
+          timestamp: new Date(),
+          message: `🔄 Retrying with Attempt ${attempt + 1}/${maxAttempts}...`,
+          type: "warning",
+        });
+        await new Promise((r) => setTimeout(r, 800));
         continue;
       }
-      break;
+      return {
+        confirmed: false,
+        attemptsRun: attempt,
+        results: allResults,
+        error: `Signing failed on all attempts: ${err.message}`,
+      };
     }
 
     const { prepared, chainId: liveChainId } = preparedData;
@@ -253,89 +285,112 @@ export async function executeSnipe(
       type: "info",
     });
 
-    const results = await blastTransactions(prepared, rpcUrls, liveChainId);
+    const results = await blastTransactions(prepared, rpcUrls, liveChainId, attempt);
     allResults.push(...results);
+
+    const dispatched = results.filter((r) => r.status === "dispatched");
 
     for (const r of results) {
       if (r.status === "dispatched") {
         onLog({
           timestamp: new Date(),
-          message: `[Attempt ${attempt}/${maxAttempts}] [${r.address.slice(0, 10)}...] TX: ${r.txHash}`,
+          message: `[Attempt ${attempt}/${maxAttempts}] [${r.address.slice(0, 10)}...] Dispatched TX: ${r.txHash}`,
           type: "success",
         });
       } else {
         onLog({
           timestamp: new Date(),
-          message: `[Attempt ${attempt}/${maxAttempts}] [${r.address.slice(0, 10)}...] REJECTED: ${r.error}`,
+          message: `[Attempt ${attempt}/${maxAttempts}] [${r.address.slice(0, 10)}...] ⚠️ RPC Rejected: ${r.error}`,
           type: "error",
         });
       }
     }
 
-    // Wait for receipts on accepted transactions (20s timeout per attempt)
-    const dispatched = results.filter((r) => r.status === "dispatched");
+    // Immediately verify on-chain receipt for dispatched transactions
     if (dispatched.length > 0) {
       onLog({
         timestamp: new Date(),
-        message: `[Attempt ${attempt}/${maxAttempts}] Checking on-chain receipt...`,
+        message: `[Attempt ${attempt}/${maxAttempts}] Verifying on-chain receipt...`,
         type: "info",
       });
 
-      const receiptStatuses = await Promise.all(
+      let confirmedResult: MintResult | undefined;
+
+      await Promise.all(
         dispatched.map(async (r) => {
-          const receipt = await waitForReceipt(r.txHash, rpcUrls[0], 20_000);
+          // Poll up to 18 seconds per attempt
+          const receipt = await waitForReceipt(r.txHash, rpcUrls[0], 18_000);
           if (receipt) {
-            r.status = receipt.status === "SUCCESS" ? "confirmed" : "failed";
-            r.blockNumber = receipt.block;
-            r.gasUsed = receipt.gasUsed;
-            onLog({
-              timestamp: new Date(),
-              message: `[Attempt ${attempt}/${maxAttempts}] [${r.address.slice(0, 10)}...] Block: ${receipt.block} | ${receipt.status} | Gas: ${receipt.gasUsed}`,
-              type: receipt.status === "SUCCESS" ? "success" : "error",
-            });
-            return receipt.status === "SUCCESS";
+            if (receipt.status === "SUCCESS") {
+              r.status = "confirmed";
+              r.blockNumber = receipt.block;
+              r.gasUsed = receipt.gasUsed;
+              confirmedResult = r;
+              onLog({
+                timestamp: new Date(),
+                message: `[Attempt ${attempt}/${maxAttempts}] ✅ MINT CONFIRMED in Block ${receipt.block} (Gas: ${receipt.gasUsed})!`,
+                type: "success",
+              });
+            } else {
+              r.status = "failed";
+              r.blockNumber = receipt.block;
+              r.gasUsed = receipt.gasUsed;
+              onLog({
+                timestamp: new Date(),
+                message: `[Attempt ${attempt}/${maxAttempts}] ❌ Transaction reverted on-chain in Block ${receipt.block}.`,
+                type: "error",
+              });
+            }
           } else {
             r.status = "timeout";
             onLog({
               timestamp: new Date(),
-              message: `[Attempt ${attempt}/${maxAttempts}] [${r.address.slice(0, 10)}...] Timeout waiting for confirmation.`,
+              message: `[Attempt ${attempt}/${maxAttempts}] ⏳ Transaction confirmation timed out.`,
               type: "warning",
             });
-            return false;
           }
         }),
       );
 
-      // If at least one transaction confirmed successfully, STOP IMMEDIATELY!
-      if (receiptStatuses.some(Boolean)) {
-        confirmed = true;
+      // SUCCESS: Stop all remaining attempts immediately!
+      if (confirmedResult) {
         onLog({
           timestamp: new Date(),
-          message: `🎯 SUCCESS on attempt ${attempt}/${maxAttempts}! Stopping further retry attempts.`,
+          message: `🎉 Mint successful on Attempt ${attempt} of ${maxAttempts}! Cancelling all remaining attempts.`,
           type: "success",
         });
-        return results;
+        return {
+          confirmed: true,
+          successfulAttempt: attempt,
+          attemptsRun: attempt,
+          results: allResults,
+          confirmedResult,
+        };
       }
     }
 
+    // Only proceed to Attempt 2/3 if the previous attempt genuinely failed or timed out
     if (attempt < maxAttempts) {
       onLog({
         timestamp: new Date(),
-        message: `⚠️ Attempt ${attempt}/${maxAttempts} did not confirm. Firing attempt ${attempt + 1}/${maxAttempts} sequentially...`,
+        message: `⚠️ Attempt ${attempt}/${maxAttempts} did not succeed. Triggering Attempt ${attempt + 1}/${maxAttempts} autonomously...`,
         type: "warning",
       });
-      // Short breather before next sequential attempt
-      await new Promise((r) => setTimeout(r, 1000));
+      await new Promise((r) => setTimeout(r, 600));
     }
   }
 
-  if (!confirmed) {
-    onLog({
-      timestamp: new Date(),
-      message: `❌ Completed all ${maxAttempts} sequential attempts without confirmation.`,
-      type: "error",
-    });
-  }
+  // All 3 attempts exhausted without success
+  onLog({
+    timestamp: new Date(),
+    message: `❌ All ${maxAttempts} sequential attempts finished without confirmation.`,
+    type: "error",
+  });
 
-  return allResults.length > 0 ? allResults : [];
+  return {
+    confirmed: false,
+    attemptsRun: maxAttempts,
+    results: allResults,
+    error: `All ${maxAttempts} sequential attempts failed or timed out.`,
+  };
 }
