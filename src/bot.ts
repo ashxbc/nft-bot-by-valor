@@ -86,9 +86,6 @@ function registerPendingHandler(
   pendingHandlers.set(chatId, handler);
 }
 
-// 12-Character Access Gate Key
-export const ACCESS_KEY = (process.env.ACCESS_KEY || "v9x2m4k7p8q3").trim();
-
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. SESSION MIDDLEWARE — MUST BE FIRST
 // ─────────────────────────────────────────────────────────────────────────────
@@ -97,61 +94,6 @@ bot.use(
     initial: createDefaultSession,
   }),
 );
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 1.5 AUTHENTICATION GATE MIDDLEWARE
-// Requires users to enter the 12-character access key before unlocking bot
-// ─────────────────────────────────────────────────────────────────────────────
-bot.use(async (ctx, next) => {
-  const sess = ctx.session;
-  if (!sess) return next();
-
-  // If already authenticated, allow through
-  if (sess.isAuthorized) {
-    return next();
-  }
-
-  const text = ctx.message?.text?.trim() || "";
-
-  // Check /start with key parameter (e.g. /start v9x2m4k7p8q3) or exact key text
-  const isStartWithKey =
-    text.startsWith("/start ") &&
-    text.slice(7).trim().toLowerCase() === ACCESS_KEY.toLowerCase();
-  const isExactKey = text.toLowerCase() === ACCESS_KEY.toLowerCase();
-
-  if (isStartWithKey || isExactKey) {
-    sess.isAuthorized = true;
-    const hasRpc = Boolean(sess.settings.customRpc);
-    await ctx.reply(
-      `🎉 <b>Access Granted!</b>\n\nWelcome to <b>SeaDrop NFT Sniper Bot</b>. Your access has been unlocked.`,
-      { parse_mode: "HTML" },
-    );
-    const startText = renderStartText(sess);
-    await ctx.reply(startText, {
-      parse_mode: "HTML",
-      reply_markup: getMainMenuKeyboard(hasRpc),
-      link_preview_options: { is_disabled: true },
-    });
-    return;
-  }
-
-  // If callback query on inline button, alert user to authenticate
-  if (ctx.callbackQuery) {
-    await ctx.answerCallbackQuery({
-      text: "🔒 Access Restricted. Enter the 12-character key first.",
-      show_alert: true,
-    });
-    return;
-  }
-
-  // Prompt the user to enter the access key
-  await ctx.reply(
-    `🔒 <b>Private Bot — Access Restricted</b>\n\n` +
-      `This bot requires authorization to access.\n` +
-      `Please enter your 12-character access key below to unlock:`,
-    { parse_mode: "HTML" },
-  );
-});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. PENDING HANDLER DISPATCHER
