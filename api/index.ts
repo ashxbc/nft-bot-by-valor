@@ -11,7 +11,7 @@
 import "dotenv/config";
 import express from "express";
 import { webhookCallback } from "grammy";
-import { bot } from "../src/bot";
+import { bot } from "../seadrop-sniper-bot/src/bot";
 
 const app = express();
 
