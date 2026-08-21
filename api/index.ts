@@ -1,8 +1,5 @@
 // SeaDrop Sniper Bot — Vercel Serverless Entry Point
 // Express + grammY webhookCallback for Telegram webhook mode.
-//
-// Architecture:
-//   Telegram -> Vercel Edge -> POST /api (or POST /) -> webhookCallback -> bot handlers
 
 import "dotenv/config";
 import express from "express";
@@ -11,6 +8,54 @@ import { bot, registerBotCommands } from "../src/bot";
 
 const app = express();
 app.use(express.json());
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTO-REGISTRATION HELPER
+// Automatically registers Telegram webhook on first request using Vercel domain or Host header
+// ─────────────────────────────────────────────────────────────────────────────
+let isWebhookAutoRegistered = false;
+
+async function ensureWebhookRegistered(hostHeader?: string) {
+  if (isWebhookAutoRegistered) return;
+
+  const rawHost =
+    process.env.VERCEL_PROJECT_PRODUCTION_URL ||
+    process.env.APP_URL ||
+    hostHeader ||
+    process.env.VERCEL_URL;
+
+  if (!rawHost || rawHost.includes("localhost")) return;
+
+  const cleanHost = rawHost.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  const webhookUrl = `https://${cleanHost}/api`;
+
+  try {
+    const info = await bot.api.getWebhookInfo();
+    if (info.url !== webhookUrl) {
+      const opts: Record<string, unknown> = {
+        max_connections: 40,
+        allowed_updates: ["message", "callback_query", "inline_query"],
+        drop_pending_updates: false,
+      };
+      if (process.env.WEBHOOK_SECRET) {
+        opts.secret_token = process.env.WEBHOOK_SECRET;
+      }
+      await bot.api.setWebhook(webhookUrl, opts);
+      await registerBotCommands().catch(console.error);
+      console.log(`✅ Webhook auto-registered to ${webhookUrl}`);
+    }
+    isWebhookAutoRegistered = true;
+  } catch (err: any) {
+    console.error("⚠️ Failed to auto-register webhook:", err.message);
+  }
+}
+
+// Attach auto-registration middleware
+app.use(async (req, _res, next) => {
+  const host = req.headers.host;
+  ensureWebhookRegistered(host).catch(console.error);
+  next();
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HEALTH CHECK — GET / and GET /api
@@ -70,7 +115,6 @@ app.get(["/info", "/api/info"], async (_req, res) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // REGISTER WEBHOOK — GET /api/register and GET /register
-// (Auto-detects host if ?url parameter is omitted)
 // ─────────────────────────────────────────────────────────────────────────────
 app.get(["/register", "/api/register"], async (req, res) => {
   const host = req.headers.host;
@@ -88,7 +132,7 @@ app.get(["/register", "/api/register"], async (req, res) => {
   }
 
   try {
-    const parsedUrl = new URL(url);
+    const parsedUrl = new URL(url.startsWith("http") ? url : `https://${url}`);
     const webhookUrl = `${parsedUrl.origin}/api`;
 
     const setWebhookOpts: Record<string, unknown> = {
