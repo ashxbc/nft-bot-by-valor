@@ -61,6 +61,7 @@ export function decryptWallet(encrypted: EncryptedWallet): string {
 
 // Session state per user — stored in grammy's session storage
 export interface UserSession {
+  isAuthorized?: boolean;
   wallets: EncryptedWallet[];
   walletAddresses: string[]; // cached for display (public only)
   settings: {
