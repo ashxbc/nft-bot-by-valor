@@ -10,12 +10,12 @@
     "vercel-build": "tsc"
   },
   "dependencies": {
-    "express": "^5.1.0",
-    "grammy": "^1.21.0",
-    "@grammyjs/runner": "^2.0.0",
     "@grammyjs/conversations": "^1.2.0",
+    "@grammyjs/runner": "^2.0.0",
+    "dotenv": "^16.3.1",
     "ethers": "^6.9.0",
-    "dotenv": "^16.3.1"
+    "express": "^4.22.2",
+    "grammy": "^1.21.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
