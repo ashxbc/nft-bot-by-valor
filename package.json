@@ -2,11 +2,11 @@
   "name": "seadrop-sniper-bot",
   "version": "1.0.0",
   "description": "Telegram bot for sniping SeaDrop NFT mints — webhooks on Vercel, long-polling for local dev",
-  "main": "dist/bot.js",
+  "main": "api/index.ts",
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts",
+    "dev": "ts-node index.ts",
     "vercel-build": "tsc"
   },
   "dependencies": {

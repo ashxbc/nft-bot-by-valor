@@ -14,6 +14,6 @@
     "declarationMap": true,
     "sourceMap": true
   },
-  "include": ["api/**/*", "seadrop-sniper-bot/src/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["api/**/*", "*.ts"],
+  "exclude": ["node_modules", "dist", "seadrop-sniper-bot"]
 }
