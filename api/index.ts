@@ -40,11 +40,12 @@ app.get("/api", (_req, res) => {
 //   4. Responds 200 OK immediately (Telegram requires <5s response)
 //
 // The bot processes the update asynchronously after the response is sent.
-app.use("/api", webhookCallback(bot, "express", {
-  // Optional: set a secret token to validate webhook requests
-  // Telegram sends this in X-Telegram-Bot-Api-Secret-Token header
-  secretToken: process.env.WEBHOOK_SECRET,
-}));
+// Only pass secretToken if actually set — undefined causes Telegram API errors
+const webhookOpts: Record<string, unknown> = {};
+if (process.env.WEBHOOK_SECRET) {
+  webhookOpts.secretToken = process.env.WEBHOOK_SECRET;
+}
+app.use("/api", webhookCallback(bot, "express", webhookOpts));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // REGISTER WEBHOOK — GET /api/register?token=YOUR_BOT_TOKEN&url=YOUR_VERCEL_URL
@@ -68,8 +69,7 @@ app.get("/api/register", async (req, res) => {
     const webhookUrl = `${parsedUrl.origin}/api`;
 
     // Register the webhook with Telegram
-    const result = await bot.api.setWebhook(webhookUrl, {
-      secret_token: process.env.WEBHOOK_SECRET || undefined,
+    const setWebhookOpts: Record<string, unknown> = {
       max_connections: 40,
       allowed_updates: [
         "message",
@@ -77,7 +77,11 @@ app.get("/api/register", async (req, res) => {
         "inline_query",
       ],
       drop_pending_updates: true,
-    });
+    };
+    if (process.env.WEBHOOK_SECRET) {
+      setWebhookOpts.secret_token = process.env.WEBHOOK_SECRET;
+    }
+    const result = await bot.api.setWebhook(webhookUrl, setWebhookOpts);
 
     res.json({
       ok: result,
