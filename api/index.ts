@@ -423,34 +423,14 @@ app.get(["/deregister", "/api/deregister"], async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AUTONOMOUS BACKGROUND TRIGGER & CRON HANDLER
-// Vercel Cron or external pingers can call this every minute to fire due snipes
+// HEALTH CHECK ENDPOINT (GET /api/ping or GET /ping)
 // ─────────────────────────────────────────────────────────────────────────────
-app.all(["/api/cron", "/cron", "/api/ping", "/ping"], async (_req, res) => {
-  try {
-    const tasks = precisionScheduler.getAllTasks();
-    const now = Date.now();
-    let firedCount = 0;
-
-    for (const task of tasks) {
-      if (task.targetTimeMs <= now) {
-        firedCount++;
-        precisionScheduler.fireTask(task.id).catch((err) => {
-          console.error("Cron fire task error:", err.message);
-        });
-      }
-    }
-
-    res.json({
-      ok: true,
-      status: "alive",
-      timestamp: new Date().toISOString(),
-      activeTasks: tasks.length,
-      firedTasks: firedCount,
-    });
-  } catch (err: any) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
+app.all(["/api/ping", "/ping", "/api/health", "/health"], (_req, res) => {
+  res.json({
+    ok: true,
+    status: "alive",
+    timestamp: new Date().toISOString(),
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
