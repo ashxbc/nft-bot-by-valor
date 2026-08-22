@@ -1,8 +1,8 @@
-// Transaction signing, multi-RPC blasting, and receipt polling.
-// Autonomous execution engine with instant verification and stop-on-success.
+// Ultra-low-latency transaction signing, multi-RPC concurrent blasting, and high-frequency receipt polling.
+// Autonomous execution engine with pre-signing, zero-friction automated progress updates, and stop-on-success.
 
 import { JsonRpcProvider, Wallet, keccak256, formatEther } from "ethers";
-import { MintPlan } from "./seadrop";
+import { MintPlan, fetchPublicDrop, buildMintPlan } from "./seadrop";
 import { LogEntry } from "./session";
 import { explorerTx } from "./chains";
 
@@ -33,6 +33,30 @@ export interface SnipeExecutionReport {
   error?: string;
 }
 
+export type SnipeProgressCallback = (update: {
+  phase: "preparing" | "dispatched" | "confirming" | "succeeded" | "retrying" | "failed";
+  attempt: number;
+  maxAttempts: number;
+  txHashes?: string[];
+  explorerUrls?: string[];
+  blockNumber?: number;
+  gasUsed?: string;
+  walletAddress?: string;
+  error?: string;
+}) => Promise<void> | void;
+
+// Provider cache to avoid re-instantiating providers and TLS handshakes
+const providerCache = new Map<string, JsonRpcProvider>();
+
+export function getCachedProvider(rpcUrl: string): JsonRpcProvider {
+  let p = providerCache.get(rpcUrl);
+  if (!p) {
+    p = new JsonRpcProvider(rpcUrl, undefined, { staticNetwork: true });
+    providerCache.set(rpcUrl, p);
+  }
+  return p;
+}
+
 // Resolve RPC URLs: user custom Alchemy RPC > additional backup RPCs > default fallback
 export function resolveRpcUrls(
   customRpc: string,
@@ -51,12 +75,12 @@ export function resolveRpcUrls(
   return [...new Set(urls)];
 }
 
-// Pre-fetch nonces and warm connections
-async function prepareWallets(
+// Pre-fetch nonces and warm provider connections
+export async function prepareWallets(
   walletKeys: string[],
   rpcUrl: string,
 ): Promise<{ wallets: Wallet[]; nonces: number[]; chainId: bigint }> {
-  const provider = new JsonRpcProvider(rpcUrl);
+  const provider = getCachedProvider(rpcUrl);
   const wallets = walletKeys.map((k) => new Wallet(k, provider));
 
   const [nonces, network] = await Promise.all([
@@ -69,7 +93,13 @@ async function prepareWallets(
   return { wallets, nonces, chainId: network.chainId };
 }
 
-// Sign all transactions before the fire moment
+export interface PreparedTransaction {
+  address: string;
+  rawTx: string;
+  txHash: string;
+}
+
+// Pre-sign all transactions into serialized raw bytes in memory
 export async function signTransactions(
   walletKeys: string[],
   plan: MintPlan,
@@ -78,16 +108,16 @@ export async function signTransactions(
   maxPriorityFee: bigint,
   gasLimit: number,
 ): Promise<{
-  prepared: { address: string; rawTx: string; txHash: string }[];
+  prepared: PreparedTransaction[];
   chainId: bigint;
   baseFee: bigint;
 }> {
   const { wallets, nonces, chainId } = await prepareWallets(walletKeys, rpcUrl);
-  const provider = new JsonRpcProvider(rpcUrl);
+  const provider = getCachedProvider(rpcUrl);
   const feeData = await provider.getFeeData();
   const baseFee = feeData.gasPrice || 0n;
 
-  const prepared: { address: string; rawTx: string; txHash: string }[] = [];
+  const prepared: PreparedTransaction[] = [];
 
   for (let i = 0; i < wallets.length; i++) {
     const rawTx = await wallets[i].signTransaction({
@@ -112,101 +142,110 @@ export async function signTransactions(
   return { prepared, chainId, baseFee };
 }
 
-// Blast raw transactions to all RPC endpoints simultaneously
+// Blast raw transactions to all RPC endpoints concurrently in parallel (millisecond latency)
 export async function blastTransactions(
-  prepared: { address: string; rawTx: string; txHash: string }[],
+  prepared: PreparedTransaction[],
   rpcUrls: string[],
   chainId: bigint,
   attempt: number = 1,
 ): Promise<MintResult[]> {
-  const results: MintResult[] = [];
-
-  for (const p of prepared) {
-    const firePromises = rpcUrls.map((url) =>
-      fetch(url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          method: "eth_sendRawTransaction",
-          params: [p.rawTx],
-          id: 1,
-        }),
-      })
-        .then(async (res) => {
-          const json = (await res.json()) as any;
-          return { url, result: json.result, error: json.error };
+  const results = await Promise.all(
+    prepared.map(async (p, idx) => {
+      // Fire to all RPC URLs simultaneously
+      const firePromises = rpcUrls.map((url) =>
+        fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            method: "eth_sendRawTransaction",
+            params: [p.rawTx],
+            id: idx + 1,
+          }),
         })
-        .catch((err) => ({
-          url,
-          result: null,
-          error: { message: err.message },
-        })),
-    );
+          .then(async (res) => {
+            const json = (await res.json()) as any;
+            return { url, result: json.result, error: json.error };
+          })
+          .catch((err) => ({
+            url,
+            result: null,
+            error: { message: err.message },
+          })),
+      );
 
-    const responses = await Promise.allSettled(firePromises);
-    const accepted = responses.some(
-      (r) =>
-        r.status === "fulfilled" &&
-        (r.value.result ||
-          (r.value.error?.message || "").includes("already known")),
-    );
+      const responses = await Promise.allSettled(firePromises);
+      const accepted = responses.some(
+        (r) =>
+          r.status === "fulfilled" &&
+          (r.value.result ||
+            (r.value.error?.message || "").includes("already known") ||
+            (r.value.error?.message || "").includes("nonce too low")),
+      );
 
-    results.push({
-      walletIndex: prepared.indexOf(p),
-      address: p.address,
-      txHash: p.txHash,
-      attempt,
-      status: accepted ? "dispatched" : "rejected",
-      explorerUrl: explorerTx(chainId, p.txHash),
-      error: accepted
-        ? undefined
-        : "Rejected by RPCs: " +
-          responses
-            .filter(
-              (r): r is PromiseFulfilledResult<any> => r.status === "fulfilled",
-            )
-            .map((r) => r.value.error?.message || "unknown")
-            .filter(Boolean)
-            .join("; "),
-    });
-  }
+      return {
+        walletIndex: idx,
+        address: p.address,
+        txHash: p.txHash,
+        attempt,
+        status: accepted ? ("dispatched" as const) : ("rejected" as const),
+        explorerUrl: explorerTx(chainId, p.txHash),
+        error: accepted
+          ? undefined
+          : "Rejected by RPCs: " +
+            responses
+              .filter(
+                (r): r is PromiseFulfilledResult<any> =>
+                  r.status === "fulfilled",
+              )
+              .map((r) => r.value.error?.message || "unknown")
+              .filter(Boolean)
+              .join("; "),
+      };
+    }),
+  );
 
   return results;
 }
 
-// Fast poll for transaction receipt (polls every 500ms for instant confirmation)
+// Ultra-fast receipt polling across all RPC endpoints (polls every 250ms for sub-second confirmation)
 export async function waitForReceipt(
   txHash: string,
-  rpcUrl: string,
-  timeoutMs: number = 20_000,
+  rpcUrls: string[],
+  timeoutMs: number = 15_000,
 ): Promise<{ block: number; gasUsed: string; status: string } | null> {
   const start = Date.now();
 
   while (Date.now() - start < timeoutMs) {
     try {
-      const res = await fetch(rpcUrl, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          method: "eth_getTransactionReceipt",
-          params: [txHash],
-          id: 1,
-        }),
-      });
-      const json = (await res.json()) as any;
-      const receipt = json.result;
+      const checkPromises = rpcUrls.map((url) =>
+        fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            method: "eth_getTransactionReceipt",
+            params: [txHash],
+            id: 1,
+          }),
+        })
+          .then(async (res) => (await res.json()) as any)
+          .catch(() => null),
+      );
 
-      if (receipt && receipt.blockNumber) {
-        return {
-          block: parseInt(receipt.blockNumber, 16),
-          gasUsed: BigInt(receipt.gasUsed).toString(),
-          status: receipt.status === "0x1" ? "SUCCESS" : "REVERTED",
-        };
+      const responses = await Promise.allSettled(checkPromises);
+      for (const resp of responses) {
+        if (resp.status === "fulfilled" && resp.value?.result?.blockNumber) {
+          const receipt = resp.value.result;
+          return {
+            block: parseInt(receipt.blockNumber, 16),
+            gasUsed: BigInt(receipt.gasUsed).toString(),
+            status: receipt.status === "0x1" ? "SUCCESS" : "REVERTED",
+          };
+        }
       }
     } catch {}
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, 250));
   }
 
   return null;
@@ -214,10 +253,12 @@ export async function waitForReceipt(
 
 /**
  * Fully Autonomous Snipe Execution Pipeline:
- * 1. Fires Attempt 1 immediately when the mint window begins.
- * 2. Immediately verifies receipt status.
- * 3. If SUCCESS: terminates immediately, cancels remaining attempts, and returns confirmation report.
- * 4. Only fires Attempt 2/3 if previous attempt genuinely failed (reverted, rejected, or timed out).
+ * 1. Automatically pre-signs and pre-warms provider connections.
+ * 2. Concurrently blasts transactions to all RPC endpoints with 0ms latency at execution moment.
+ * 3. Monitors on-chain confirmation in tight 250ms sub-second intervals.
+ * 4. Pushes live automated progress callbacks to Telegram without requiring any user click.
+ * 5. On SUCCESS: terminates immediately, cancels remaining attempts, and returns confirmation report.
+ * 6. Only fires Attempt 2/3 if previous attempt genuinely failed (reverted, rejected, or timed out).
  */
 export async function executeSnipe(
   walletKeys: string[],
@@ -229,20 +270,29 @@ export async function executeSnipe(
   chainId: bigint,
   onLog: (log: LogEntry) => void,
   maxAttempts: number = 3,
+  onProgress?: SnipeProgressCallback,
 ): Promise<SnipeExecutionReport> {
   const allResults: MintResult[] = [];
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    // Dynamic fee bumping on retries (+20% priority fee per retry attempt for fast replacement)
-    const multiplier = BigInt(Math.floor(100 + (attempt - 1) * 20));
+    // Dynamic fee bumping on retries (+25% priority fee per retry attempt for instant mempool replacement)
+    const multiplier = BigInt(Math.floor(100 + (attempt - 1) * 25));
     const currentMaxFee = (baseMaxFee * multiplier) / 100n;
     const currentPriorityFee = (basePriorityFee * multiplier) / 100n;
 
     onLog({
       timestamp: new Date(),
-      message: `[Attempt ${attempt}/${maxAttempts}] Signing transactions for ${walletKeys.length} wallet(s)...`,
+      message: `[Attempt ${attempt}/${maxAttempts}] Pre-signing raw transaction(s) for ${walletKeys.length} wallet(s)...`,
       type: "info",
     });
+
+    if (onProgress) {
+      await onProgress({
+        phase: "preparing",
+        attempt,
+        maxAttempts,
+      });
+    }
 
     let preparedData;
     try {
@@ -257,16 +307,24 @@ export async function executeSnipe(
     } catch (err: any) {
       onLog({
         timestamp: new Date(),
-        message: `[Attempt ${attempt}/${maxAttempts}] ❌ Signing failed: ${err.message}`,
+        message: `[Attempt ${attempt}/${maxAttempts}] ❌ Signing error: ${err.message}`,
         type: "error",
       });
       if (attempt < maxAttempts) {
         onLog({
           timestamp: new Date(),
-          message: `🔄 Retrying with Attempt ${attempt + 1}/${maxAttempts}...`,
+          message: `🔄 Proceeding to Attempt ${attempt + 1}/${maxAttempts}...`,
           type: "warning",
         });
-        await new Promise((r) => setTimeout(r, 800));
+        if (onProgress) {
+          await onProgress({
+            phase: "retrying",
+            attempt,
+            maxAttempts,
+            error: `Signing failed: ${err.message}`,
+          });
+        }
+        await new Promise((r) => setTimeout(r, 400));
         continue;
       }
       return {
@@ -281,14 +339,22 @@ export async function executeSnipe(
 
     onLog({
       timestamp: new Date(),
-      message: `[Attempt ${attempt}/${maxAttempts}] 🚀 Blasting to ${rpcUrls.length} RPC endpoint(s)...`,
+      message: `[Attempt ${attempt}/${maxAttempts}] 🚀 Blasting concurrently across ${rpcUrls.length} RPCs...`,
       type: "info",
     });
 
-    const results = await blastTransactions(prepared, rpcUrls, liveChainId, attempt);
+    // Zero-delay parallel blast
+    const results = await blastTransactions(
+      prepared,
+      rpcUrls,
+      liveChainId,
+      attempt,
+    );
     allResults.push(...results);
 
     const dispatched = results.filter((r) => r.status === "dispatched");
+    const txHashes = results.map((r) => r.txHash);
+    const explorerUrls = results.map((r) => r.explorerUrl);
 
     for (const r of results) {
       if (r.status === "dispatched") {
@@ -306,20 +372,40 @@ export async function executeSnipe(
       }
     }
 
+    if (onProgress) {
+      await onProgress({
+        phase: "dispatched",
+        attempt,
+        maxAttempts,
+        txHashes,
+        explorerUrls,
+      });
+    }
+
     // Immediately verify on-chain receipt for dispatched transactions
     if (dispatched.length > 0) {
       onLog({
         timestamp: new Date(),
-        message: `[Attempt ${attempt}/${maxAttempts}] Verifying on-chain receipt...`,
+        message: `[Attempt ${attempt}/${maxAttempts}] Monitoring on-chain block inclusion (250ms polling)...`,
         type: "info",
       });
+
+      if (onProgress) {
+        await onProgress({
+          phase: "confirming",
+          attempt,
+          maxAttempts,
+          txHashes,
+          explorerUrls,
+        });
+      }
 
       let confirmedResult: MintResult | undefined;
 
       await Promise.all(
         dispatched.map(async (r) => {
-          // Poll up to 18 seconds per attempt
-          const receipt = await waitForReceipt(r.txHash, rpcUrls[0], 18_000);
+          // Poll up to 15 seconds per attempt
+          const receipt = await waitForReceipt(r.txHash, rpcUrls, 15_000);
           if (receipt) {
             if (receipt.status === "SUCCESS") {
               r.status = "confirmed";
@@ -356,9 +442,23 @@ export async function executeSnipe(
       if (confirmedResult) {
         onLog({
           timestamp: new Date(),
-          message: `🎉 Mint successful on Attempt ${attempt} of ${maxAttempts}! Cancelling all remaining attempts.`,
+          message: `🎯 Mint confirmed on Attempt ${attempt} of ${maxAttempts}! Stopped remaining attempts.`,
           type: "success",
         });
+
+        if (onProgress) {
+          await onProgress({
+            phase: "succeeded",
+            attempt,
+            maxAttempts,
+            txHashes: [confirmedResult.txHash],
+            explorerUrls: [confirmedResult.explorerUrl],
+            blockNumber: confirmedResult.blockNumber,
+            gasUsed: confirmedResult.gasUsed,
+            walletAddress: confirmedResult.address,
+          });
+        }
+
         return {
           confirmed: true,
           successfulAttempt: attempt,
@@ -373,19 +473,35 @@ export async function executeSnipe(
     if (attempt < maxAttempts) {
       onLog({
         timestamp: new Date(),
-        message: `⚠️ Attempt ${attempt}/${maxAttempts} did not succeed. Triggering Attempt ${attempt + 1}/${maxAttempts} autonomously...`,
+        message: `⚠️ Attempt ${attempt}/${maxAttempts} did not confirm. Triggering Attempt ${attempt + 1}/${maxAttempts} autonomously with boosted priority fee...`,
         type: "warning",
       });
-      await new Promise((r) => setTimeout(r, 600));
+      if (onProgress) {
+        await onProgress({
+          phase: "retrying",
+          attempt: attempt + 1,
+          maxAttempts,
+        });
+      }
+      await new Promise((r) => setTimeout(r, 250));
     }
   }
 
-  // All 3 attempts exhausted without success
+  // All sequential attempts exhausted
   onLog({
     timestamp: new Date(),
     message: `❌ All ${maxAttempts} sequential attempts finished without confirmation.`,
     type: "error",
   });
+
+  if (onProgress) {
+    await onProgress({
+      phase: "failed",
+      attempt: maxAttempts,
+      maxAttempts,
+      error: `All ${maxAttempts} attempts completed without confirmation.`,
+    });
+  }
 
   return {
     confirmed: false,
