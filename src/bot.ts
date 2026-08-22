@@ -31,6 +31,23 @@ import {
 import { precisionScheduler } from "./scheduler";
 import { DEFAULT_CHAIN, resolveChain } from "./chains";
 import {
+  upsertUser,
+  getUser,
+  addWalletAddress,
+  getWalletAddresses,
+  deleteWalletAddress,
+  clearWalletAddresses,
+  createMintTask,
+  updateMintTask,
+  logActivity,
+  decryptSensitive,
+} from "./db";
+import {
+  scheduleSnipeJob,
+  cancelSnipeJob,
+  cancelAllUserJobs,
+} from "./queue";
+import {
   BOT_COMMANDS,
   esc,
   code,
@@ -108,6 +125,37 @@ bot.use(
     storage: persistentStorage,
   }),
 );
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 1b. SUPABASE USER & WALLET SYNC MIDDLEWARE
+// Synchronizes persistent settings and public wallet addresses from PostgreSQL
+// ─────────────────────────────────────────────────────────────────────────────
+bot.use(async (ctx, next) => {
+  const chatId = ctx.chat?.id;
+  if (chatId && ctx.session) {
+    try {
+      const dbUser = await getUser(chatId);
+      if (dbUser) {
+        if (dbUser.custom_rpc_encrypted && !ctx.session.settings.customRpc) {
+          ctx.session.settings.customRpc = decryptSensitive(dbUser.custom_rpc_encrypted);
+        }
+        if (dbUser.max_fee_per_gas) ctx.session.settings.maxFeePerGas = dbUser.max_fee_per_gas;
+        if (dbUser.max_priority_fee) ctx.session.settings.maxPriorityFee = dbUser.max_priority_fee;
+        if (dbUser.active_chain) ctx.session.settings.activeChain = dbUser.active_chain;
+        if (dbUser.gas_safety_cap !== undefined) ctx.session.settings.gasSafetyCap = dbUser.gas_safety_cap;
+      }
+      const dbWallets = await getWalletAddresses(chatId);
+      if (dbWallets && dbWallets.length > 0) {
+        for (const addr of dbWallets) {
+          if (!ctx.session.walletAddresses.includes(addr)) {
+            ctx.session.walletAddresses.push(addr);
+          }
+        }
+      }
+    } catch {}
+  }
+  await next();
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. PENDING HANDLER DISPATCHER
@@ -373,8 +421,13 @@ bot.callbackQuery("wallet_clear_prompt", async (ctx) => {
 bot.callbackQuery("wallet_clear_confirmed", async (ctx) => {
   ctx.session.wallets = [];
   ctx.session.walletAddresses = [];
+  const chatId = ctx.chat?.id;
+  if (chatId) {
+    await clearWalletAddresses(chatId);
+    await logActivity(chatId, "Cleared all wallets", "info");
+  }
   await ctx.answerCallbackQuery({ text: "All wallets cleared" });
-  await ctx.reply("🗑️ All wallets have been cleared from memory.", {
+  await ctx.reply("🗑️ All wallets have been cleared from memory and database.", {
     reply_markup: getWalletsKeyboard(false),
   });
 });
@@ -867,6 +920,10 @@ async function promptAddWallet(ctx: Context & SessionFlavor<UserSession>) {
       ctx.session.wallets.push(encrypted);
       ctx.session.walletAddresses.push(wallet.address);
 
+      // Save public address to Supabase (Zero private keys saved!)
+      await addWalletAddress(chatId, wallet.address);
+      await logActivity(chatId, `Added wallet ${wallet.address.slice(0, 10)}...`, "info");
+
       await msgCtx.reply(
         `✅ <b>Wallet added successfully!</b>\n\nAddress: ${code(wallet.address)}`,
         {
@@ -1120,7 +1177,7 @@ async function runSnipeWithLiveCard(
           `⛽ <b>Gas Used:</b> <code>${r.gasUsed}</code>\n` +
           `🔗 <b>Transaction:</b> ${link(r.txHash.slice(0, 18) + "...", r.explorerUrl)}\n\n` +
           `✅ <i>Mint transaction verified on-chain automatically!</i>`,
-        getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
+        getStatusKeyboard(),
       );
     } else {
       const attemptLines = report.results
@@ -1138,7 +1195,7 @@ async function runSnipeWithLiveCard(
           `🎯 <b>Collection:</b> ${code(contractAddress)}\n\n` +
           `<b>Attempt History:</b>\n${attemptLines}\n\n` +
           `<i>All sequential retries exhausted without confirmation.</i>`,
-        getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
+        getStatusKeyboard(),
       );
     }
   } catch (err: any) {
@@ -1330,6 +1387,43 @@ async function executeConfirmedSnipe(
 
   const targetTimeMs = isImmediate ? Date.now() : scheduledTime.getTime();
 
+  // 1. Save Task to Supabase (Zero Private Key Storage - only metadata & parameters)
+  await createMintTask({
+    id: snipeId,
+    user_id: chatId,
+    chat_id: chatId,
+    message_id: liveCardId,
+    contract_address: contractAddress,
+    quantity,
+    max_fee_per_gas: wizard.maxFeePerGas || sess.settings.maxFeePerGas,
+    max_priority_fee: wizard.maxPriorityFee || sess.settings.maxPriorityFee,
+    timing_mode: timingMode,
+    target_time: isImmediate ? new Date().toISOString() : scheduledTime.toISOString(),
+    status: isImmediate ? "executing" : "armed",
+    attempts_run: 0,
+  });
+
+  await logActivity(
+    chatId,
+    `Armed T-0 snipe for ${contractAddress.slice(0, 10)}... (Qty: ${quantity})`,
+    "info",
+    snipeId,
+  );
+
+  // 2. Schedule via BullMQ (Duplicate prevention via unique taskId)
+  await scheduleSnipeJob({
+    taskId: snipeId,
+    userId: chatId,
+    chatId,
+    messageId: liveCardId,
+    contractAddress,
+    quantity,
+    timingMode,
+    targetTimeMs,
+    rpcUrls,
+    armedSnipe,
+  });
+
   if (isImmediate) {
     // ═══════════════ IMMEDIATE FIRE ═══════════════
     await updateLiveCard(
@@ -1372,6 +1466,7 @@ async function executeConfirmedSnipe(
         `• <b>Waiting:</b> <b>${formatDuration(Math.max(0, Math.ceil(waitMs / 1000)))}</b>\n\n` +
         `⚡ <b>Ultra-Low Latency Pipeline Ready:</b>\n` +
         `  ✅ All 3 execution attempts pre-signed in memory\n` +
+        `  ✅ BullMQ precision queue scheduled\n` +
         `  ✅ Persistent keep-alive sockets pre-warming\n` +
         `  ✅ 0ms preparation latency guaranteed at T-0\n` +
         `  ✅ Parallel blast across ${rpcUrls.length} RPCs\n` +
@@ -1380,7 +1475,7 @@ async function executeConfirmedSnipe(
       getArmedSnipeKeyboard(),
     );
 
-    // Schedule precision T-0 execution
+    // Precision scheduler execution bridge
     await precisionScheduler.scheduleSnipe({
       id: snipeId,
       armedSnipe,
@@ -1539,6 +1634,11 @@ async function handleCancelTasks(ctx: Context & SessionFlavor<UserSession>) {
   }
 
   precisionScheduler.cancelAll();
+  const chatId = ctx.chat?.id;
+  if (chatId) {
+    await cancelAllUserJobs(chatId);
+  }
+
   for (const snipe of pending) {
     snipe.status = "cancelled";
     sess.logs.push({
@@ -1546,6 +1646,16 @@ async function handleCancelTasks(ctx: Context & SessionFlavor<UserSession>) {
       message: `Cancelled snipe for ${snipe.contractAddress.slice(0, 10)}...`,
       type: "warning",
     });
+
+    if (chatId) {
+      await updateMintTask(snipe.id, { status: "cancelled" });
+      await logActivity(
+        chatId,
+        `Cancelled snipe for ${snipe.contractAddress.slice(0, 10)}...`,
+        "warning",
+        snipe.id,
+      );
+    }
   }
 
   await ctx.reply(`✅ Cancelled ${pending.length} pending task(s).`, {
