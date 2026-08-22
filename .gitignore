@@ -18,6 +18,9 @@ build/
 .env.development.local
 .env.test.local
 .env.production.local
+sessions.json
+*.sessions.json
+data/
 
 # OS & Editor files
 .DS_Store

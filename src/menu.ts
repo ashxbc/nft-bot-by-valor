@@ -104,8 +104,10 @@ export function getSettingsKeyboard(sess: UserSession): InlineKeyboard {
   const capLabel = sess.settings.gasSafetyCap ? "ON ✅" : "OFF ❌";
   const hasCustomRpc = Boolean(sess.settings.customRpc);
 
-  const kb = new InlineKeyboard()
-    .text("🔗 Set / Update Alchemy RPC", "set_rpc_prompt");
+  const kb = new InlineKeyboard().text(
+    "🔗 Set / Update Alchemy RPC",
+    "set_rpc_prompt",
+  );
 
   if (hasCustomRpc) {
     kb.text("🗑️ Reset RPC", "reset_rpc_action");
@@ -113,7 +115,10 @@ export function getSettingsKeyboard(sess: UserSession): InlineKeyboard {
 
   kb.row()
     .text(`⛽ Max Fee: ${sess.settings.maxFeePerGas} Gwei`, "set_maxfee_prompt")
-    .text(`⚡ Priority: ${sess.settings.maxPriorityFee} Gwei`, "set_priority_prompt")
+    .text(
+      `⚡ Priority: ${sess.settings.maxPriorityFee} Gwei`,
+      "set_priority_prompt",
+    )
     .row()
     .text("📡 Switch Network", "set_chain_prompt")
     .text(`🛡️ Safety Cap: ${capLabel}`, "toggle_safety_action")
@@ -180,7 +185,8 @@ export function renderStartText(sess: UserSession): string {
   const chain = resolveChain(sess.settings.activeChain);
   const walletCount = sess.walletAddresses.length;
   const activeSnipes = sess.activeSnipes.filter(
-    (s) => s.status === "pending" || s.status === "waiting" || s.status === "firing",
+    (s) =>
+      s.status === "pending" || s.status === "waiting" || s.status === "firing",
   ).length;
 
   const hasRpc = Boolean(sess.settings.customRpc);
@@ -260,7 +266,8 @@ export function renderSettingsText(sess: UserSession): string {
 
 export function renderStatusText(sess: UserSession): string {
   const activeSnipes = sess.activeSnipes.filter(
-    (s) => s.status === "pending" || s.status === "waiting" || s.status === "firing",
+    (s) =>
+      s.status === "pending" || s.status === "waiting" || s.status === "firing",
   );
 
   const snipeLines =

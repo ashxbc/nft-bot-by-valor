@@ -4,7 +4,7 @@
 
 import "dotenv/config";
 import { Bot, Context, session, SessionFlavor, NextFunction } from "grammy";
-import { freeStorage } from "@grammyjs/storage-free";
+import { PersistentSessionStorage } from "./storage";
 import {
   Wallet,
   parseUnits,
@@ -90,10 +90,12 @@ function registerPendingHandler(
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. SESSION MIDDLEWARE — MUST BE FIRST
 // ─────────────────────────────────────────────────────────────────────────────
+const persistentStorage = new PersistentSessionStorage();
+
 bot.use(
   session({
     initial: createDefaultSession,
-    storage: freeStorage<UserSession>(bot.token) as any,
+    storage: persistentStorage,
   }),
 );
 
@@ -1164,7 +1166,11 @@ async function fireScheduledSnipe(
     { parse_mode: "HTML" },
   );
 
-  const plan = await buildMintPlan(rpcUrls[0], snipe.contractAddress, snipe.quantity);
+  const plan = await buildMintPlan(
+    rpcUrls[0],
+    snipe.contractAddress,
+    snipe.quantity,
+  );
   if (!plan) {
     snipe.status = "failed";
     await updateLiveCard(

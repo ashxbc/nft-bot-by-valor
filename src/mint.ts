@@ -34,7 +34,13 @@ export interface SnipeExecutionReport {
 }
 
 export type SnipeProgressCallback = (update: {
-  phase: "preparing" | "dispatched" | "confirming" | "succeeded" | "retrying" | "failed";
+  phase:
+    | "preparing"
+    | "dispatched"
+    | "confirming"
+    | "succeeded"
+    | "retrying"
+    | "failed";
   attempt: number;
   maxAttempts: number;
   txHashes?: string[];
