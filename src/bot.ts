@@ -1578,7 +1578,11 @@ async function promptSetRpc(ctx: Context & SessionFlavor<UserSession>) {
       ctx.session.settings.customRpc = input;
       if (chatId) {
         await upsertUser({ telegramId: chatId, customRpc: input });
-        await logActivity(chatId, "Saved personal Alchemy RPC endpoint", "info");
+        await logActivity(
+          chatId,
+          "Saved personal Alchemy RPC endpoint",
+          "info",
+        );
       }
       const masked = maskRpcUrl(input);
 
