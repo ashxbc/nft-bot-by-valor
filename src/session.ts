@@ -95,7 +95,7 @@ export interface ActiveSnipe {
   maxFeePerGas: string;
   maxPriorityFee: string;
   timingMode: "mint_start" | "specific_time" | "now";
-  scheduledTime?: Date;
+  scheduledTime?: string; // ISO string (must be serializable for persistent storage)
   status:
     | "pending"
     | "waiting"
@@ -105,12 +105,12 @@ export interface ActiveSnipe {
     | "cancelled";
   txHashes: string[];
   attempts?: number;
-  startedAt: Date;
-  abortController?: AbortController;
+  startedAt: string; // ISO string (must be serializable for persistent storage)
+  chatId?: number; // Telegram chat ID for scheduled snipe live updates
 }
 
 export interface LogEntry {
-  timestamp: Date;
+  timestamp: string; // ISO string for persistent storage
   message: string;
   type: "info" | "success" | "error" | "warning";
 }

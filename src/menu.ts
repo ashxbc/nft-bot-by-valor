@@ -270,7 +270,7 @@ export function renderStatusText(sess: UserSession): string {
           .map((s) => {
             const countdown =
               s.scheduledTime && s.status === "waiting"
-                ? ` ⏳ ${formatDuration(Math.max(0, Math.ceil((s.scheduledTime.getTime() - Date.now()) / 1000)))} left`
+                ? ` ⏳ ${formatDuration(Math.max(0, Math.ceil((new Date(s.scheduledTime).getTime() - Date.now()) / 1000)))} left`
                 : "";
             const modeLabel =
               s.timingMode === "mint_start"
@@ -296,7 +296,7 @@ export function renderStatusText(sess: UserSession): string {
                   : l.type === "warning"
                     ? "⚠️"
                     : "ℹ️";
-            const time = l.timestamp.toLocaleTimeString();
+            const time = new Date(l.timestamp).toLocaleTimeString();
             return `  ${icon} [${esc(time)}] ${esc(l.message)}`;
           })
           .join("\n");

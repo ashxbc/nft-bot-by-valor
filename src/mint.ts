@@ -281,7 +281,7 @@ export async function executeSnipe(
     const currentPriorityFee = (basePriorityFee * multiplier) / 100n;
 
     onLog({
-      timestamp: new Date(),
+      timestamp: new Date().toISOString(),
       message: `[Attempt ${attempt}/${maxAttempts}] Pre-signing raw transaction(s) for ${walletKeys.length} wallet(s)...`,
       type: "info",
     });
@@ -306,13 +306,13 @@ export async function executeSnipe(
       );
     } catch (err: any) {
       onLog({
-        timestamp: new Date(),
+        timestamp: new Date().toISOString(),
         message: `[Attempt ${attempt}/${maxAttempts}] ❌ Signing error: ${err.message}`,
         type: "error",
       });
       if (attempt < maxAttempts) {
         onLog({
-          timestamp: new Date(),
+          timestamp: new Date().toISOString(),
           message: `🔄 Proceeding to Attempt ${attempt + 1}/${maxAttempts}...`,
           type: "warning",
         });
@@ -338,7 +338,7 @@ export async function executeSnipe(
     const { prepared, chainId: liveChainId } = preparedData;
 
     onLog({
-      timestamp: new Date(),
+      timestamp: new Date().toISOString(),
       message: `[Attempt ${attempt}/${maxAttempts}] 🚀 Blasting concurrently across ${rpcUrls.length} RPCs...`,
       type: "info",
     });
@@ -359,13 +359,13 @@ export async function executeSnipe(
     for (const r of results) {
       if (r.status === "dispatched") {
         onLog({
-          timestamp: new Date(),
+          timestamp: new Date().toISOString(),
           message: `[Attempt ${attempt}/${maxAttempts}] [${r.address.slice(0, 10)}...] Dispatched TX: ${r.txHash}`,
           type: "success",
         });
       } else {
         onLog({
-          timestamp: new Date(),
+          timestamp: new Date().toISOString(),
           message: `[Attempt ${attempt}/${maxAttempts}] [${r.address.slice(0, 10)}...] ⚠️ RPC Rejected: ${r.error}`,
           type: "error",
         });
@@ -385,7 +385,7 @@ export async function executeSnipe(
     // Immediately verify on-chain receipt for dispatched transactions
     if (dispatched.length > 0) {
       onLog({
-        timestamp: new Date(),
+        timestamp: new Date().toISOString(),
         message: `[Attempt ${attempt}/${maxAttempts}] Monitoring on-chain block inclusion (250ms polling)...`,
         type: "info",
       });
@@ -413,7 +413,7 @@ export async function executeSnipe(
               r.gasUsed = receipt.gasUsed;
               confirmedResult = r;
               onLog({
-                timestamp: new Date(),
+                timestamp: new Date().toISOString(),
                 message: `[Attempt ${attempt}/${maxAttempts}] ✅ MINT CONFIRMED in Block ${receipt.block} (Gas: ${receipt.gasUsed})!`,
                 type: "success",
               });
@@ -422,7 +422,7 @@ export async function executeSnipe(
               r.blockNumber = receipt.block;
               r.gasUsed = receipt.gasUsed;
               onLog({
-                timestamp: new Date(),
+                timestamp: new Date().toISOString(),
                 message: `[Attempt ${attempt}/${maxAttempts}] ❌ Transaction reverted on-chain in Block ${receipt.block}.`,
                 type: "error",
               });
@@ -430,7 +430,7 @@ export async function executeSnipe(
           } else {
             r.status = "timeout";
             onLog({
-              timestamp: new Date(),
+              timestamp: new Date().toISOString(),
               message: `[Attempt ${attempt}/${maxAttempts}] ⏳ Transaction confirmation timed out.`,
               type: "warning",
             });
@@ -441,7 +441,7 @@ export async function executeSnipe(
       // SUCCESS: Stop all remaining attempts immediately!
       if (confirmedResult) {
         onLog({
-          timestamp: new Date(),
+          timestamp: new Date().toISOString(),
           message: `🎯 Mint confirmed on Attempt ${attempt} of ${maxAttempts}! Stopped remaining attempts.`,
           type: "success",
         });
@@ -472,7 +472,7 @@ export async function executeSnipe(
     // Only proceed to Attempt 2/3 if the previous attempt genuinely failed or timed out
     if (attempt < maxAttempts) {
       onLog({
-        timestamp: new Date(),
+        timestamp: new Date().toISOString(),
         message: `⚠️ Attempt ${attempt}/${maxAttempts} did not confirm. Triggering Attempt ${attempt + 1}/${maxAttempts} autonomously with boosted priority fee...`,
         type: "warning",
       });
@@ -489,7 +489,7 @@ export async function executeSnipe(
 
   // All sequential attempts exhausted
   onLog({
-    timestamp: new Date(),
+    timestamp: new Date().toISOString(),
     message: `❌ All ${maxAttempts} sequential attempts finished without confirmation.`,
     type: "error",
   });

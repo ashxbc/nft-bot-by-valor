@@ -4,6 +4,7 @@
 
 import "dotenv/config";
 import { Bot, Context, session, SessionFlavor, NextFunction } from "grammy";
+import { freeStorage } from "@grammyjs/storage-free";
 import {
   Wallet,
   parseUnits,
@@ -92,6 +93,7 @@ function registerPendingHandler(
 bot.use(
   session({
     initial: createDefaultSession,
+    storage: freeStorage<UserSession>(bot.token) as any,
   }),
 );
 
@@ -107,6 +109,43 @@ bot.on("message", async (ctx, next) => {
     pendingHandlers.delete(chatId);
     await handler(ctx, next);
     return;
+  }
+
+  await next();
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2b. SCHEDULED SNIPE CHECKER — runs on every incoming update
+// Since setTimeout dies on Vercel serverless, we check for due snipes here.
+// ─────────────────────────────────────────────────────────────────────────────
+bot.use(async (ctx, next) => {
+  const sess = ctx.session;
+  if (!sess || !sess.activeSnipes) {
+    await next();
+    return;
+  }
+
+  const now = Date.now();
+  const dueSnipes = sess.activeSnipes.filter(
+    (s) =>
+      s.status === "waiting" &&
+      s.scheduledTime &&
+      new Date(s.scheduledTime).getTime() <= now,
+  );
+
+  if (dueSnipes.length > 0) {
+    // Fire due snipes in the background without blocking the current update
+    for (const snipe of dueSnipes) {
+      snipe.status = "firing";
+      const targetChatId = snipe.chatId || ctx.chat?.id;
+      if (targetChatId) {
+        // Fire asynchronously — don't await to avoid blocking the user's current interaction
+        fireScheduledSnipe(ctx, sess, snipe, targetChatId).catch((err) => {
+          console.error("Scheduled snipe fire error:", err.message);
+          snipe.status = "failed";
+        });
+      }
+    }
   }
 
   await next();
@@ -958,6 +997,9 @@ async function showSnipeSummary(ctx: Context, sess: UserSession) {
   });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// LIVE CARD HELPER — edit a single message in-place for real-time streaming
+// ─────────────────────────────────────────────────────────────────────────────
 async function updateLiveCard(
   api: any,
   chatId: number,
@@ -972,12 +1014,191 @@ async function updateLiveCard(
       link_preview_options: { is_disabled: true },
     });
   } catch (err: any) {
+    // Ignore "message is not modified" errors from rapid consecutive edits
     if (!err.message?.includes("message is not modified")) {
-      // Ignore minor duplicate edit errors from fast stream
+      console.error("updateLiveCard error:", err.message);
     }
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CORE SNIPE EXECUTOR — fires transactions and streams live updates to a card
+// ─────────────────────────────────────────────────────────────────────────────
+async function runSnipeWithLiveCard(
+  api: any,
+  chatId: number,
+  liveCardId: number,
+  sess: UserSession,
+  activeSnipe: ActiveSnipe,
+  contractAddress: string,
+  quantity: number,
+  plan: any,
+  rpcUrls: string[],
+  maxFee: bigint,
+  maxTip: bigint,
+  chainId: bigint,
+) {
+  try {
+    const report = await executeSnipe(
+      sess.wallets.map((w) => decryptWallet(w)),
+      plan,
+      rpcUrls,
+      maxFee,
+      maxTip,
+      250_000,
+      chainId,
+      (log) => sess.logs.push({ ...log, timestamp: new Date().toISOString() }),
+      3,
+      async (progress) => {
+        if (progress.phase === "preparing") {
+          await updateLiveCard(
+            api,
+            chatId,
+            liveCardId,
+            `⚡ <b>Autonomous Snipe — Attempt ${progress.attempt}/${progress.maxAttempts}</b>\n\n` +
+              `🎯 <b>Collection:</b> ${code(contractAddress)}\n` +
+              `🔢 <b>Quantity:</b> <code>${quantity}</code>\n\n` +
+              `⏳ <i>Pre-signing transactions & warming RPC connections...</i>`,
+          );
+        } else if (progress.phase === "dispatched") {
+          const txLinks = (progress.txHashes || [])
+            .map(
+              (h, i) =>
+                `🔗 <b>TX:</b> ${link(h.slice(0, 16) + "...", progress.explorerUrls?.[i] || "#")}`,
+            )
+            .join("\n");
+          await updateLiveCard(
+            api,
+            chatId,
+            liveCardId,
+            `🚀 <b>Firing Transaction — Attempt ${progress.attempt}/${progress.maxAttempts}</b>\n\n` +
+              `🎯 <b>Collection:</b> ${code(contractAddress)}\n` +
+              `📡 <b>Dispatched to mempool!</b>\n` +
+              `${txLinks}\n\n` +
+              `⏳ <i>Monitoring on-chain block inclusion (250ms polling)...</i>`,
+          );
+        } else if (progress.phase === "retrying") {
+          await updateLiveCard(
+            api,
+            chatId,
+            liveCardId,
+            `⚠️ <b>Attempt ${progress.attempt - 1} failed — Firing Attempt ${progress.attempt}</b>\n\n` +
+              `🎯 <b>Collection:</b> ${code(contractAddress)}\n` +
+              `🔄 <i>Bumping priority fee (+25%) and blasting Attempt ${progress.attempt}...</i>`,
+          );
+        }
+      },
+    );
+
+    activeSnipe.txHashes = report.results.map((r) => r.txHash);
+    activeSnipe.status = report.confirmed ? "completed" : "failed";
+
+    if (report.confirmed && report.confirmedResult) {
+      const r = report.confirmedResult;
+      await updateLiveCard(
+        api,
+        chatId,
+        liveCardId,
+        `🎉 <b>NFT Mint Snipe Confirmed!</b>\n\n` +
+          `🎯 <b>Collection:</b> ${code(contractAddress)}\n` +
+          `👤 <b>Minter Wallet:</b> ${code(r.address)}\n` +
+          `🔢 <b>Quantity:</b> <code>${quantity}</code>\n` +
+          `⚡ <b>Succeeded On:</b> <b>Attempt ${report.successfulAttempt} of 3</b> <i>(Stopped remaining attempts)</i>\n` +
+          `📦 <b>Block:</b> <code>${r.blockNumber}</code>\n` +
+          `⛽ <b>Gas Used:</b> <code>${r.gasUsed}</code>\n` +
+          `🔗 <b>Transaction:</b> ${link(r.txHash.slice(0, 18) + "...", r.explorerUrl)}\n\n` +
+          `✅ <i>Mint transaction verified on-chain automatically!</i>`,
+        getStatusKeyboard(),
+      );
+    } else {
+      const attemptLines = report.results
+        .map(
+          (r) =>
+            `  • Attempt ${r.attempt}: <b>${r.status.toUpperCase()}</b> (${esc(r.error || "No receipt")}) — ${link("TX", r.explorerUrl)}`,
+        )
+        .join("\n");
+
+      await updateLiveCard(
+        api,
+        chatId,
+        liveCardId,
+        `❌ <b>Snipe Failed After ${report.attemptsRun} Attempt(s)</b>\n\n` +
+          `🎯 <b>Collection:</b> ${code(contractAddress)}\n\n` +
+          `<b>Attempt History:</b>\n${attemptLines}\n\n` +
+          `<i>All sequential retries exhausted without confirmation.</i>`,
+        getStatusKeyboard(),
+      );
+    }
+  } catch (err: any) {
+    activeSnipe.status = "failed";
+    await updateLiveCard(
+      api,
+      chatId,
+      liveCardId,
+      `❌ <b>Snipe execution error:</b> ${esc(err.message)}`,
+      getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FIRE SCHEDULED SNIPE — called by the middleware checker when a snipe is due
+// ─────────────────────────────────────────────────────────────────────────────
+async function fireScheduledSnipe(
+  ctx: BotContext,
+  sess: UserSession,
+  snipe: ActiveSnipe,
+  chatId: number,
+) {
+  const rpcUrls = resolveRpcUrls(
+    sess.settings.customRpc,
+    process.env.ADDITIONAL_RPC_URLS || "",
+  );
+  const chain = resolveChain(sess.settings.activeChain);
+
+  const initMsg = await ctx.api.sendMessage(
+    chatId,
+    `⏰ <b>Mint window arrived! Autonomously firing transaction...</b>\n\n` +
+      `🎯 <b>Collection:</b> ${code(snipe.contractAddress)}\n` +
+      `🔢 <b>Quantity:</b> <code>${snipe.quantity}</code>`,
+    { parse_mode: "HTML" },
+  );
+
+  const plan = await buildMintPlan(rpcUrls[0], snipe.contractAddress, snipe.quantity);
+  if (!plan) {
+    snipe.status = "failed";
+    await updateLiveCard(
+      ctx.api,
+      chatId,
+      initMsg.message_id,
+      `❌ <b>Could not build mint plan.</b> Contract may not be an active SeaDrop collection.`,
+      getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
+    );
+    return;
+  }
+
+  const maxFee = parseUnits(snipe.maxFeePerGas, "gwei");
+  const maxTip = parseUnits(snipe.maxPriorityFee, "gwei");
+
+  await runSnipeWithLiveCard(
+    ctx.api,
+    chatId,
+    initMsg.message_id,
+    sess,
+    snipe,
+    snipe.contractAddress,
+    snipe.quantity,
+    plan,
+    rpcUrls,
+    maxFee,
+    maxTip,
+    BigInt(chain?.chainId || DEFAULT_CHAIN.chainId),
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EXECUTE CONFIRMED SNIPE — main entry point from wizard confirmation
+// ─────────────────────────────────────────────────────────────────────────────
 async function executeConfirmedSnipe(
   ctx: Context & SessionFlavor<UserSession>,
 ) {
@@ -1005,28 +1226,32 @@ async function executeConfirmedSnipe(
   const scheduledTimeStr = wizard.scheduledTime;
   const chatId = ctx.chat?.id;
 
+  if (!chatId) {
+    await ctx.reply("⚠️ Could not determine chat ID.");
+    return;
+  }
+
   const chain = resolveChain(sess.settings.activeChain);
   const rpcUrls = resolveRpcUrls(
     sess.settings.customRpc,
     process.env.ADDITIONAL_RPC_URLS || "",
   );
 
-  const initMsg = await ctx.reply("🔍 <i>Building mint plan from on-chain SeaDrop parameters...</i>", {
-    parse_mode: "HTML",
-  });
+  const initMsg = await ctx.reply(
+    "🔍 <i>Building mint plan from on-chain SeaDrop parameters...</i>",
+    { parse_mode: "HTML" },
+  );
   const liveCardId = initMsg.message_id;
 
   const plan = await buildMintPlan(rpcUrls[0], contractAddress, quantity);
   if (!plan) {
-    if (chatId) {
-      await updateLiveCard(
-        ctx.api,
-        chatId,
-        liveCardId,
-        "❌ <b>Could not build mint plan.</b> Contract may not be an active SeaDrop collection.",
-        getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
-      );
-    }
+    await updateLiveCard(
+      ctx.api,
+      chatId,
+      liveCardId,
+      "❌ <b>Could not build mint plan.</b> Contract may not be an active SeaDrop collection.",
+      getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
+    );
     sess.snipeWizard = undefined;
     return;
   }
@@ -1050,265 +1275,69 @@ async function executeConfirmedSnipe(
     maxFeePerGas: wizard.maxFeePerGas || sess.settings.maxFeePerGas,
     maxPriorityFee: wizard.maxPriorityFee || sess.settings.maxPriorityFee,
     timingMode,
-    scheduledTime: scheduledTimeStr ? new Date(scheduledTimeStr) : undefined,
+    scheduledTime: scheduledTimeStr || undefined,
     status: isImmediate ? "firing" : "waiting",
     txHashes: [],
-    startedAt: new Date(),
+    startedAt: new Date().toISOString(),
+    chatId,
   };
 
   sess.activeSnipes.push(activeSnipe);
   sess.snipeWizard = undefined;
 
   if (isImmediate) {
-    if (chatId) {
-      await updateLiveCard(
-        ctx.api,
-        chatId,
-        liveCardId,
-        `🚀 <b>Autonomous Execution Started</b>\n\n` +
-          `🎯 <b>Collection:</b> ${code(contractAddress)}\n` +
-          `🔢 <b>Quantity:</b> <code>${quantity}</code>\n` +
-          `⚡ <i>Pre-signing transactions & warming RPC connections...</i>`,
-      );
-    }
+    // ═══════════════ IMMEDIATE FIRE ═══════════════
+    await updateLiveCard(
+      ctx.api,
+      chatId,
+      liveCardId,
+      `🚀 <b>Firing Transaction</b>\n\n` +
+        `🎯 <b>Collection:</b> ${code(contractAddress)}\n` +
+        `🔢 <b>Quantity:</b> <code>${quantity}</code>\n` +
+        `⚡ <i>Pre-signing transactions & warming RPC connections...</i>`,
+    );
 
-    try {
-      const report = await executeSnipe(
-        sess.wallets.map((w) => decryptWallet(w)),
-        plan,
-        rpcUrls,
-        maxFee,
-        maxTip,
-        250_000,
-        BigInt(chain?.chainId || DEFAULT_CHAIN.chainId),
-        (log) => sess.logs.push(log),
-        3,
-        async (progress) => {
-          if (!chatId) return;
-          if (progress.phase === "dispatched") {
-            const txLinks = (progress.txHashes || [])
-              .map(
-                (h, i) =>
-                  `🔗 <b>TX:</b> ${link(h.slice(0, 16) + "...", progress.explorerUrls?.[i] || "#")}`,
-              )
-              .join("\n");
-            await updateLiveCard(
-              ctx.api,
-              chatId,
-              liveCardId,
-              `🚀 <b>Autonomous Snipe — Attempt ${progress.attempt}/${progress.maxAttempts}</b>\n\n` +
-                `🎯 <b>Collection:</b> ${code(contractAddress)}\n` +
-                `📡 <b>Dispatched to mempool in 0ms!</b>\n` +
-                `${txLinks}\n\n` +
-                `⏳ <i>Monitoring on-chain block inclusion (250ms sub-second polling)...</i>`,
-            );
-          } else if (progress.phase === "retrying") {
-            await updateLiveCard(
-              ctx.api,
-              chatId,
-              liveCardId,
-              `⚠️ <b>Attempt ${progress.attempt - 1} did not confirm.</b>\n\n` +
-                `🎯 <b>Collection:</b> ${code(contractAddress)}\n` +
-                `🔄 <i>Autonomously bumping priority fee (+25%) and blasting Attempt ${progress.attempt}...</i>`,
-            );
-          }
-        },
-      );
-
-      activeSnipe.txHashes = report.results.map((r) => r.txHash);
-      activeSnipe.status = report.confirmed ? "completed" : "failed";
-
-      if (report.confirmed && report.confirmedResult && chatId) {
-        const r = report.confirmedResult;
-        const successMsg =
-          `🎉 <b>NFT Mint Snipe Confirmed!</b>\n\n` +
-          `🎯 <b>Collection:</b> ${code(contractAddress)}\n` +
-          `👤 <b>Minter Wallet:</b> ${code(r.address)}\n` +
-          `🔢 <b>Quantity:</b> <code>${quantity}</code>\n` +
-          `⚡ <b>Succeeded On:</b> <b>Attempt ${report.successfulAttempt} of 3</b> <i>(Stopped remaining attempts)</i>\n` +
-          `📦 <b>Block:</b> <code>${r.blockNumber}</code>\n` +
-          `⛽ <b>Gas Used:</b> <code>${r.gasUsed}</code>\n` +
-          `🔗 <b>Transaction:</b> ${link(r.txHash.slice(0, 18) + "...", r.explorerUrl)}\n\n` +
-          `✅ <i>Mint transaction verified on-chain automatically!</i>`;
-
-        await updateLiveCard(ctx.api, chatId, liveCardId, successMsg);
-      } else if (chatId) {
-        const attemptLines = report.results
-          .map(
-            (r) =>
-              `  • Attempt ${r.attempt}: <b>${r.status.toUpperCase()}</b> (${esc(r.error || "No receipt")}) — ${link("TX", r.explorerUrl)}`,
-          )
-          .join("\n");
-
-        await updateLiveCard(
-          ctx.api,
-          chatId,
-          liveCardId,
-          `❌ <b>Snipe Failed After ${report.attemptsRun} Sequential Attempt(s)</b>\n\n` +
-            `🎯 <b>Collection:</b> ${code(contractAddress)}\n\n` +
-            `<b>Attempt History:</b>\n${attemptLines}\n\n` +
-            `<i>All sequential retries were exhausted without confirmation.</i>`,
-        );
-      }
-    } catch (err: any) {
-      activeSnipe.status = "failed";
-      if (chatId) {
-        await updateLiveCard(
-          ctx.api,
-          chatId,
-          liveCardId,
-          `❌ <b>Snipe execution error:</b> ${esc(err.message)}`,
-        );
-      }
-    }
+    await runSnipeWithLiveCard(
+      ctx.api,
+      chatId,
+      liveCardId,
+      sess,
+      activeSnipe,
+      contractAddress,
+      quantity,
+      plan,
+      rpcUrls,
+      maxFee,
+      maxTip,
+      BigInt(chain?.chainId || DEFAULT_CHAIN.chainId),
+    );
   } else {
-    // Scheduled for start time or specific custom time
+    // ═══════════════ SCHEDULED — store in persistent session ═══════════════
     const scheduledTime = new Date(scheduledTimeStr!);
     const waitMs = scheduledTime.getTime() - Date.now();
 
     const modeTitle =
       timingMode === "mint_start" ? "⚡ Mint Start (T-0)" : "⏰ Specific Time";
 
-    if (chatId) {
-      await updateLiveCard(
-        ctx.api,
-        chatId,
-        liveCardId,
-        `🎯 <b>Snipe Armed for Autonomous Execution!</b>\n\n` +
-          `• <b>Mode:</b> ${esc(modeTitle)}\n` +
-          `• <b>Target Time:</b> <code>${esc(scheduledTime.toISOString())}</code>\n` +
-          `• <b>Waiting:</b> <b>${formatDuration(Math.max(0, Math.ceil(waitMs / 1000)))}</b>\n` +
-          `• <b>Autonomous Pipeline:</b>\n` +
-          `  1️⃣ Pre-warms RPC connections at T-3s\n` +
-          `  2️⃣ Pre-signs raw transactions in memory\n` +
-          `  3️⃣ Blasts Attempt 1 instantly at T-0 with 0ms latency\n` +
-          `  4️⃣ Sub-second (250ms) receipt verification\n` +
-          `  5️⃣ Auto-stops all remaining attempts upon confirmation\n\n` +
-          `<i>No action required from you. Sit back and watch live updates here!</i>`,
-      );
-    }
-
-    // Pre-warm connections 3 seconds before drop
-    if (waitMs > 3000) {
-      setTimeout(() => {
-        rpcUrls.forEach((url) => {
-          fetch(url, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ jsonrpc: "2.0", method: "net_version", params: [], id: 99 }),
-          }).catch(() => {});
-        });
-      }, waitMs - 3000);
-    }
-
-    const timeoutId = setTimeout(
-      async () => {
-        activeSnipe.status = "firing";
-        if (chatId) {
-          await updateLiveCard(
-            ctx.api,
-            chatId,
-            liveCardId,
-            `⏰ <b>Target mint window arrived! Autonomously firing Attempt 1 in 0ms...</b>`,
-          );
-        }
-
-        try {
-          const report = await executeSnipe(
-            sess.wallets.map((w) => decryptWallet(w)),
-            plan,
-            rpcUrls,
-            maxFee,
-            maxTip,
-            250_000,
-            BigInt(chain?.chainId || DEFAULT_CHAIN.chainId),
-            (log) => sess.logs.push(log),
-            3,
-            async (progress) => {
-              if (!chatId) return;
-              if (progress.phase === "dispatched") {
-                const txLinks = (progress.txHashes || [])
-                  .map(
-                    (h, i) =>
-                      `🔗 <b>TX:</b> ${link(h.slice(0, 16) + "...", progress.explorerUrls?.[i] || "#")}`,
-                  )
-                  .join("\n");
-                await updateLiveCard(
-                  ctx.api,
-                  chatId,
-                  liveCardId,
-                  `🚀 <b>Autonomous Snipe — Attempt ${progress.attempt}/${progress.maxAttempts}</b>\n\n` +
-                    `🎯 <b>Collection:</b> ${code(contractAddress)}\n` +
-                    `📡 <b>Dispatched to mempool in 0ms!</b>\n` +
-                    `${txLinks}\n\n` +
-                    `⏳ <i>Monitoring on-chain block inclusion (250ms sub-second polling)...</i>`,
-                );
-              } else if (progress.phase === "retrying") {
-                await updateLiveCard(
-                  ctx.api,
-                  chatId,
-                  liveCardId,
-                  `⚠️ <b>Attempt ${progress.attempt - 1} did not confirm.</b>\n\n` +
-                    `🎯 <b>Collection:</b> ${code(contractAddress)}\n` +
-                    `🔄 <i>Autonomously bumping priority fee (+25%) and blasting Attempt ${progress.attempt}...</i>`,
-                );
-              }
-            },
-          );
-
-          activeSnipe.txHashes = report.results.map((r) => r.txHash);
-          activeSnipe.status = report.confirmed ? "completed" : "failed";
-
-          if (chatId) {
-            if (report.confirmed && report.confirmedResult) {
-              const r = report.confirmedResult;
-              const msg =
-                `🎉 <b>Autonomous Snipe Confirmed!</b>\n\n` +
-                `🎯 <b>Collection:</b> ${code(contractAddress)}\n` +
-                `👤 <b>Minter Wallet:</b> ${code(r.address)}\n` +
-                `🔢 <b>Quantity:</b> <code>${quantity}</code>\n` +
-                `⚡ <b>Succeeded On:</b> <b>Attempt ${report.successfulAttempt} of 3</b> <i>(Stopped remaining attempts)</i>\n` +
-                `📦 <b>Block:</b> <code>${r.blockNumber}</code>\n` +
-                `⛽ <b>Gas Used:</b> <code>${r.gasUsed}</code>\n` +
-                `🔗 <b>Transaction:</b> ${link(r.txHash.slice(0, 18) + "...", r.explorerUrl)}\n\n` +
-                `✅ <i>Mint verified on-chain autonomously!</i>`;
-
-              await updateLiveCard(ctx.api, chatId, liveCardId, msg);
-            } else {
-              const attemptLines = report.results
-                .map(
-                  (r) =>
-                    `  • Attempt ${r.attempt}: <b>${r.status.toUpperCase()}</b> (${esc(r.error || "No receipt")}) — ${link("TX", r.explorerUrl)}`,
-                )
-                .join("\n");
-
-              await updateLiveCard(
-                ctx.api,
-                chatId,
-                liveCardId,
-                `❌ <b>Autonomous Snipe Completed Without Success</b>\n\n` +
-                  `🎯 <b>Collection:</b> ${code(contractAddress)}\n\n` +
-                  `<b>Attempt History:</b>\n${attemptLines}\n\n` +
-                  `<i>All 3 sequential attempts were exhausted.</i>`,
-              );
-            }
-          }
-        } catch (err: any) {
-          activeSnipe.status = "failed";
-          if (chatId) {
-            await updateLiveCard(
-              ctx.api,
-              chatId,
-              liveCardId,
-              `❌ <b>Autonomous snipe execution failed:</b> ${esc(err.message)}`,
-            );
-          }
-        }
-      },
-      Math.max(0, waitMs),
+    await updateLiveCard(
+      ctx.api,
+      chatId,
+      liveCardId,
+      `🎯 <b>Snipe Armed for Autonomous Execution!</b>\n\n` +
+        `• <b>Mode:</b> ${esc(modeTitle)}\n` +
+        `• <b>Target Time:</b> <code>${esc(scheduledTime.toISOString())}</code>\n` +
+        `• <b>Waiting:</b> <b>${formatDuration(Math.max(0, Math.ceil(waitMs / 1000)))}</b>\n` +
+        `• <b>Autonomous Pipeline:</b>\n` +
+        `  1️⃣ Detects mint window on next interaction\n` +
+        `  2️⃣ Fires transaction immediately\n` +
+        `  3️⃣ Monitors confirmation (250ms polling)\n` +
+        `  4️⃣ Auto-retries on failure (+25% fee bump)\n` +
+        `  5️⃣ Stops on first confirmed success\n\n` +
+        `<i>Your wallets, RPC, and snipe config are saved permanently.\nThe bot will auto-fire when the mint window opens. Use /cancel to abort.</i>`,
+      getStatusKeyboard(),
     );
-
-    (activeSnipe as any)._timeoutId = timeoutId;
+    // Snipe is now stored in persistent session with status "waiting".
+    // The checkScheduledSnipes middleware will detect it and fire automatically.
   }
 }
 
@@ -1456,12 +1485,8 @@ async function handleCancelTasks(ctx: Context & SessionFlavor<UserSession>) {
 
   for (const snipe of pending) {
     snipe.status = "cancelled";
-    const timeoutId = (snipe as any)._timeoutId;
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
     sess.logs.push({
-      timestamp: new Date(),
+      timestamp: new Date().toISOString(),
       message: `Cancelled snipe for ${snipe.contractAddress.slice(0, 10)}...`,
       type: "warning",
     });
