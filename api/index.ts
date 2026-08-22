@@ -212,6 +212,9 @@ function renderDashboardHtml(
         <a href="https://t.me/${botUsername.replace(/^@/, "")}" target="_blank" class="btn tg-btn">💬 Open Bot in Telegram (${botUsername})</a>
       </div>
     </div>
+    <div style="text-align: center; margin-top: 24px; color: #94a3b8; font-size: 14px;">
+      ⚡ Built by <a href="https://x.com/valor0x" target="_blank" style="color: #818cf8; text-decoration: none; font-weight: 600;">Valor</a>
+    </div>
   </div>
 </body>
 </html>`;

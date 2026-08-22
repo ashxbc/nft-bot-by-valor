@@ -1494,12 +1494,13 @@ async function executeConfirmedSnipe(
         `• <b>Waiting:</b> <b>${formatDuration(Math.max(0, Math.ceil(waitMs / 1000)))}</b>\n\n` +
         `⚡ <b>Ultra-Low Latency Pipeline Ready:</b>\n` +
         `  ✅ All 3 execution attempts pre-signed in memory\n` +
-        `  ✅ BullMQ precision queue scheduled\n` +
+        `  ✅ Autonomous T-0 execution armed\n` +
         `  ✅ Persistent keep-alive sockets pre-warming\n` +
         `  ✅ 0ms preparation latency guaranteed at T-0\n` +
         `  ✅ Parallel blast across ${rpcUrls.length} RPCs\n` +
         `  ✅ Sub-second 200ms receipt confirmation\n\n` +
-        `🟢 <i>Fully autonomous — the bot will fire and stream live updates automatically. Do not click anything!</i>`,
+        `🟢 <i>Fully autonomous — the bot will fire and stream live updates automatically. Do not click anything!</i>\n\n` +
+        `⚡ Built by <a href="https://x.com/valor0x">Valor</a>`,
       getArmedSnipeKeyboard(),
     );
 

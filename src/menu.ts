@@ -232,7 +232,8 @@ export function renderStartText(sess: UserSession): string {
     `  • Safety Cap: <b>${sess.settings.gasSafetyCap ? "ON ✅" : "OFF ❌"}</b>\n\n` +
     `👤 <b>Wallets:</b>\n  ${walletLines.replace(/\n/g, "\n  ")}\n\n` +
     `🎯 <b>Active Tasks:</b> <code>${activeSnipes}</code>\n\n` +
-    `👇 <i>Use the interactive buttons below or Telegram command menu [/] to navigate:</i>`
+    `👇 <i>Use the interactive buttons below or Telegram command menu [/] to navigate:</i>\n\n` +
+    `⚡ Built by <a href="https://x.com/valor0x">Valor</a>`
   );
 }
 
@@ -346,6 +347,6 @@ export function renderHelpText(): string {
     `/status — Monitor running tasks, countdowns, and execution logs\n` +
     `/cancel — Stop active wizard or cancel scheduled tasks\n` +
     `/help — Show this help guide\n\n` +
-    `<i>Select an option below to get started:</i>`
+    `⚡ Built by <a href="https://x.com/valor0x">Valor</a>`
   );
 }

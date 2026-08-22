@@ -91,18 +91,7 @@ export async function processSnipeJob(
     taskId,
   );
 
-  // 2. Push instant Telegram alert
-  bot.api
-    .sendMessage(
-      chatId,
-      `🚀 <b>T-0 Mint Window Arrived! Firing Transaction...</b>\n` +
-        `🎯 <b>Collection:</b> ${code(contractAddress)}\n` +
-        `⚡ <i>Blasting pre-signed raw bytes across ${rpcUrls.length} RPCs...</i>`,
-      { parse_mode: "HTML" },
-    )
-    .catch(() => {});
-
-  // 3. Execute pre-signed armed snipe with live Telegram streaming
+  // 2. Execute pre-signed armed snipe with live Telegram streaming
   const report = await executeArmedSnipe(
     armedSnipe,
     rpcUrls,
@@ -147,7 +136,7 @@ export async function processSnipeJob(
     },
   );
 
-  // 4. Update Supabase with final execution results
+  // 3. Update Supabase with final execution results
   const txHashes = report.results.map((r) => r.txHash);
 
   if (report.confirmed && report.confirmedResult) {
@@ -185,7 +174,8 @@ export async function processSnipeJob(
         `⛽ <b>Gas Used:</b> <code>${r.gasUsed}</code>\n` +
         `⏱️ <b>Total Execution Time:</b> <code>${report.totalExecutionMs || 0}ms</code>\n` +
         `🔗 <b>Transaction:</b> ${link(r.txHash.slice(0, 18) + "...", r.explorerUrl)}\n\n` +
-        `✅ <i>Mint transaction verified on-chain automatically!</i>`,
+        `✅ <i>Mint transaction verified on-chain automatically!</i>\n\n` +
+        `⚡ Built by <a href="https://x.com/valor0x">Valor</a>`,
       getMainMenuKeyboard(hasRpc),
     );
   } else {

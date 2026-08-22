@@ -138,15 +138,6 @@ class PrecisionScheduler {
     const t0DeltaMs = fireStartTime - targetTimeMs;
 
     try {
-      // Push an immediate notification to Telegram
-      api.sendMessage(
-        chatId,
-        `🚀 <b>T-0 Mint Window Arrived! Firing Transaction...</b>\n` +
-          `🎯 <b>Collection:</b> ${code(armedSnipe.contractAddress || "SeaDrop")}\n` +
-          `⚡ <i>Blasting pre-signed raw bytes across ${rpcUrls.length} RPCs...</i>`,
-        { parse_mode: "HTML" },
-      ).catch(() => {});
-
       const report = await executeArmedSnipe(
         armedSnipe,
         rpcUrls,
@@ -211,7 +202,8 @@ class PrecisionScheduler {
             `⛽ <b>Gas Used:</b> <code>${r.gasUsed}</code>\n` +
             `⏱️ <b>Total Execution Time:</b> <code>${report.totalExecutionMs || 0}ms</code>\n` +
             `🔗 <b>Transaction:</b> ${link(r.txHash.slice(0, 18) + "...", r.explorerUrl)}\n\n` +
-            `✅ <i>Mint transaction verified on-chain automatically!</i>`,
+            `✅ <i>Mint transaction verified on-chain automatically!</i>\n\n` +
+            `⚡ Built by <a href="https://x.com/valor0x">Valor</a>`,
           getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
         );
       } else {
