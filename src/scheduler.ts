@@ -28,7 +28,10 @@ export interface ScheduledSnipeTask {
   sess: UserSession;
   activeSnipe: ActiveSnipe;
   api: any;
-  onExecuted?: (report: SnipeExecutionReport | null, executedAtMs: number) => void;
+  onExecuted?: (
+    report: SnipeExecutionReport | null,
+    executedAtMs: number,
+  ) => void;
 }
 
 class PrecisionScheduler {
@@ -62,7 +65,9 @@ class PrecisionScheduler {
    * Arms and registers a pre-signed snipe for autonomous T-0 execution.
    * If targetTime is within 4 minutes, holds the promise open so serverless environments (Vercel) do not sleep.
    */
-  async scheduleSnipe(task: ScheduledSnipeTask): Promise<SnipeExecutionReport | null> {
+  async scheduleSnipe(
+    task: ScheduledSnipeTask,
+  ): Promise<SnipeExecutionReport | null> {
     const { id, targetTimeMs, rpcUrls } = task;
     this.cancelTask(id);
     this.tasks.set(id, task);
@@ -131,7 +136,16 @@ class PrecisionScheduler {
     if (!task) return null;
 
     this.cancelTask(id);
-    const { armedSnipe, rpcUrls, chatId, messageId, api, sess, activeSnipe, targetTimeMs } = task;
+    const {
+      armedSnipe,
+      rpcUrls,
+      chatId,
+      messageId,
+      api,
+      sess,
+      activeSnipe,
+      targetTimeMs,
+    } = task;
 
     activeSnipe.status = "firing";
     const fireStartTime = Date.now();
@@ -206,13 +220,15 @@ class PrecisionScheduler {
             `⚡ Built by <a href="https://x.com/valor0x">Valor</a>`,
           getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
         );
-      } else {
-        const attemptLines = report.results
-          .map(
-            (r) =>
-              `  • Attempt ${r.attempt}: <b>${r.status.toUpperCase()}</b> (${esc(r.error || "No receipt")}) — ${link("TX", r.explorerUrl)}`,
-          )
-          .join("\n");
+        const attemptLines =
+          report.results && report.results.length > 0
+            ? report.results
+                .map(
+                  (r) =>
+                    `  • Attempt ${r.attempt}: <b>${r.status.toUpperCase()}</b>\n    └ <i>${esc(r.error || "Mempool inclusion timeout — no receipt")}</i>${r.txHash ? ` — ${link("View TX", r.explorerUrl)}` : ""}`,
+                )
+                .join("\n")
+            : "  • ⚠️ No transactions could be broadcast. (Check wallet balance and RPC endpoint)";
 
         await this.updateCard(
           api,
@@ -221,7 +237,8 @@ class PrecisionScheduler {
           `❌ <b>Snipe Finished Without Confirmation</b>\n\n` +
             `🎯 <b>Collection:</b> ${code(armedSnipe.contractAddress || "SeaDrop")}\n\n` +
             `<b>Attempt History:</b>\n${attemptLines}\n\n` +
-            `<i>All sequential attempts were exhausted.</i>`,
+            `<i>All sequential attempts were exhausted.</i>\n\n` +
+            `⚡ Built by <a href="https://x.com/valor0x">Valor</a>`,
           getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
         );
       }

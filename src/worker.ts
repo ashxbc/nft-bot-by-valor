@@ -195,12 +195,15 @@ export async function processSnipeJob(
       taskId,
     );
 
-    const attemptLines = report.results
-      .map(
-        (r) =>
-          `  • Attempt ${r.attempt}: <b>${r.status.toUpperCase()}</b> (${esc(r.error || "No receipt")}) — ${link("TX", r.explorerUrl)}`,
-      )
-      .join("\n");
+    const attemptLines =
+      report.results && report.results.length > 0
+        ? report.results
+            .map(
+              (r) =>
+                `  • Attempt ${r.attempt}: <b>${r.status.toUpperCase()}</b>\n    └ <i>${esc(r.error || "Mempool inclusion timeout — no receipt")}</i>${r.txHash ? ` — ${link("View TX", r.explorerUrl)}` : ""}`,
+            )
+            .join("\n")
+        : "  • ⚠️ No transactions could be broadcast. (Check wallet balance and RPC endpoint)";
 
     const user = await getUser(userId);
     const hasRpc = Boolean(user?.custom_rpc_encrypted);
@@ -211,7 +214,8 @@ export async function processSnipeJob(
       `❌ <b>Snipe Finished Without Confirmation</b>\n\n` +
         `🎯 <b>Collection:</b> ${code(contractAddress)}\n\n` +
         `<b>Attempt History:</b>\n${attemptLines}\n\n` +
-        `<i>All sequential attempts were exhausted.</i>`,
+        `<i>All sequential attempts were exhausted.</i>\n\n` +
+        `⚡ Built by <a href="https://x.com/valor0x">Valor</a>`,
       getMainMenuKeyboard(hasRpc),
     );
   }

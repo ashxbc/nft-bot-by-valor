@@ -157,6 +157,12 @@ export async function prepareWallets(
   walletKeys: string[],
   rpcUrl: string,
 ): Promise<{ wallets: Wallet[]; nonces: number[]; chainId: bigint }> {
+  if (!walletKeys || walletKeys.length === 0) {
+    throw new Error(
+      "No wallet private keys loaded. Please add your wallet private key via /wallets before sniping.",
+    );
+  }
+
   const provider = getCachedProvider(rpcUrl);
   const wallets = walletKeys.map((k) => new Wallet(k, provider));
 
@@ -234,7 +240,7 @@ export async function preSignAllAttempts(
 
   return {
     id: snipeId,
-    contractAddress: plan.drop ? plan.to : "",
+    contractAddress: plan.nftContract || plan.to,
     quantity: 1,
     plan,
     chainId,

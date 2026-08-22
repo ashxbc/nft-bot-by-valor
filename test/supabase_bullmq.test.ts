@@ -154,6 +154,7 @@ async function runTests() {
   console.log(
     "▶ TEST 2: Public Wallet Management (Strict Zero Private Key Storage)",
   );
+  await clearWalletAddresses(testUserId);
   await addWalletAddress(testUserId, testWallet.address);
   await addWalletAddress(testUserId, testWallet2.address);
 

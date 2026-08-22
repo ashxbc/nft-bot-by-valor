@@ -1022,12 +1022,14 @@ async function displayWalletBalances(
 async function startSnipeWizard(ctx: Context & SessionFlavor<UserSession>) {
   const sess = ctx.session;
 
-  if (sess.walletAddresses.length === 0) {
+  if (sess.wallets.length === 0) {
     await ctx.reply(
-      "⚠️ <b>Add wallets first before sniping.</b>\nClick below to add a wallet:",
+      "⚠️ <b>Wallet private key required in session.</b>\n" +
+        "Your public address is saved in Supabase, but private keys are never stored on disk or in the database for security.\n\n" +
+        "👉 Click <b>➕ Add Wallet</b> below to enter your private key before starting a snipe:",
       {
         parse_mode: "HTML",
-        reply_markup: getWalletsKeyboard(false),
+        reply_markup: getWalletsKeyboard(sess.walletAddresses.length > 0),
       },
     );
     return;
@@ -1341,6 +1343,20 @@ async function executeConfirmedSnipe(
     { parse_mode: "HTML" },
   );
   const liveCardId = initMsg.message_id;
+
+  if (!sess.wallets || sess.wallets.length === 0) {
+    await updateLiveCard(
+      ctx.api,
+      chatId,
+      liveCardId,
+      "❌ <b>No wallet private key loaded in session.</b>\n\n" +
+        "Your public address is saved in Supabase, but private keys are never stored on disk or in the database for security.\n\n" +
+        "👉 Please add your wallet key via /wallets before confirming a snipe.",
+      getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
+    );
+    sess.snipeWizard = undefined;
+    return;
+  }
 
   const plan = await buildMintPlan(rpcUrls[0], contractAddress, quantity);
   if (!plan) {

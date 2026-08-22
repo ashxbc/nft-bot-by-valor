@@ -34,6 +34,7 @@ export interface MintPlan {
   value: bigint;
   drop: PublicDrop;
   feeRecipient: string;
+  nftContract?: string;
 }
 
 export async function fetchPublicDrop(
@@ -131,5 +132,6 @@ export async function buildMintPlan(
     value: drop.mintPrice * BigInt(quantity),
     drop,
     feeRecipient: fee.address,
+    nftContract,
   };
 }
