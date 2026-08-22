@@ -29,7 +29,9 @@ function isAuthorized(req: express.Request): boolean {
   const cookieKey = getCookie(req, "gate_pass");
   const headerKey = req.headers["x-access-key"] as string;
   const authHeader = req.headers.authorization;
-  const bearerKey = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
+  const bearerKey = authHeader?.startsWith("Bearer ")
+    ? authHeader.slice(7)
+    : undefined;
 
   const key = queryKey || cookieKey || headerKey || bearerKey;
   return Boolean(key && key.trim().toLowerCase() === ACCESS_KEY.toLowerCase());
@@ -128,7 +130,11 @@ function renderLoginHtml(error?: string): string {
 </html>`;
 }
 
-function renderDashboardHtml(botUsername: string, webhookInfo: any, baseUrl: string): string {
+function renderDashboardHtml(
+  botUsername: string,
+  webhookInfo: any,
+  baseUrl: string,
+): string {
   const isHookActive = Boolean(webhookInfo?.url);
   const statusBadge = isHookActive
     ? `<span style="background:rgba(34,197,94,0.15); color:#4ade80; border:1px solid #22c55e; padding:4px 10px; border-radius:20px; font-size:12px; font-weight:600;">ACTIVE</span>`
@@ -203,7 +209,7 @@ function renderDashboardHtml(botUsername: string, webhookInfo: any, baseUrl: str
         <a href="/deregister" class="btn btn-danger">🧹 Deregister Webhook</a>
         <a href="/api/info" target="_blank" class="btn btn-secondary">📊 Raw Diagnostics (JSON)</a>
         <a href="/" class="btn btn-secondary">🔄 Refresh Panel</a>
-        <a href="https://t.me/${botUsername.replace(/^@/, '')}" target="_blank" class="btn tg-btn">💬 Open Bot in Telegram (${botUsername})</a>
+        <a href="https://t.me/${botUsername.replace(/^@/, "")}" target="_blank" class="btn tg-btn">💬 Open Bot in Telegram (${botUsername})</a>
       </div>
     </div>
   </div>
@@ -223,7 +229,11 @@ app.post("/login", (req, res) => {
     );
     return res.redirect("/");
   }
-  res.status(401).send(renderLoginHtml("❌ Invalid 12-character access key. Please try again."));
+  res
+    .status(401)
+    .send(
+      renderLoginHtml("❌ Invalid 12-character access key. Please try again."),
+    );
 });
 
 app.get("/logout", (_req, res) => {
@@ -252,7 +262,8 @@ app.get(["/", "/api"], async (req, res) => {
     }
     return res.status(401).json({
       ok: false,
-      error: "Access Restricted: 12-character access key required. Access via browser or pass ?key=...",
+      error:
+        "Access Restricted: 12-character access key required. Access via browser or pass ?key=...",
     });
   }
 
@@ -371,7 +382,8 @@ app.get(["/register", "/api/register"], async (req, res) => {
     res.json({
       ok: result,
       webhook_url: webhookUrl,
-      message: "Webhook registered successfully! Bot is now live and receiving updates.",
+      message:
+        "Webhook registered successfully! Bot is now live and receiving updates.",
       webhookInfo,
     });
   } catch (err: any) {
@@ -402,7 +414,8 @@ app.get(["/deregister", "/api/deregister"], async (req, res) => {
 
     res.json({
       ok: result,
-      message: "Webhook removed. Bot can now use local long-polling (npm run dev).",
+      message:
+        "Webhook removed. Bot can now use local long-polling (npm run dev).",
     });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });

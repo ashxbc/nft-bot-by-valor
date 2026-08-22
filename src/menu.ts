@@ -133,8 +133,7 @@ export function getArmedSnipeKeyboard(): InlineKeyboard {
 }
 
 export function getLiveExecutionKeyboard(): InlineKeyboard {
-  return new InlineKeyboard()
-    .text("🛑 Abort Snipe", "menu_cancel");
+  return new InlineKeyboard().text("🛑 Abort Snipe", "menu_cancel");
 }
 
 export function getStatusKeyboard(): InlineKeyboard {

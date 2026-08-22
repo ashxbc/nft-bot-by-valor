@@ -1120,7 +1120,7 @@ async function runSnipeWithLiveCard(
           `⛽ <b>Gas Used:</b> <code>${r.gasUsed}</code>\n` +
           `🔗 <b>Transaction:</b> ${link(r.txHash.slice(0, 18) + "...", r.explorerUrl)}\n\n` +
           `✅ <i>Mint transaction verified on-chain automatically!</i>`,
-        getStatusKeyboard(),
+        getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
       );
     } else {
       const attemptLines = report.results
@@ -1138,7 +1138,7 @@ async function runSnipeWithLiveCard(
           `🎯 <b>Collection:</b> ${code(contractAddress)}\n\n` +
           `<b>Attempt History:</b>\n${attemptLines}\n\n` +
           `<i>All sequential retries exhausted without confirmation.</i>`,
-        getStatusKeyboard(),
+        getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
       );
     }
   } catch (err: any) {
@@ -1283,7 +1283,9 @@ async function executeConfirmedSnipe(
 
   const snipeId = `snipe_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const isImmediate = timingMode === "now" || !scheduledTimeStr;
-  const scheduledTime = scheduledTimeStr ? new Date(scheduledTimeStr) : new Date();
+  const scheduledTime = scheduledTimeStr
+    ? new Date(scheduledTimeStr)
+    : new Date();
 
   // PRE-SIGN ALL 3 EXECUTION ATTEMPTS NOW (Ahead of T-0)
   let armedSnipe: ArmedSnipe;

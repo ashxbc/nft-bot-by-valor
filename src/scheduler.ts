@@ -1,5 +1,6 @@
 // High-precision autonomous sniper scheduler and connection warmer.
 // Pre-warms keep-alive RPC connections and triggers sub-millisecond dispatch at exact T-0.
+// On serverless (Vercel), holds execution open for upcoming drops so the Lambda does NOT freeze before T-0.
 
 import {
   ArmedSnipe,
@@ -59,8 +60,9 @@ class PrecisionScheduler {
 
   /**
    * Arms and registers a pre-signed snipe for autonomous T-0 execution.
+   * If targetTime is within 4 minutes, holds the promise open so serverless environments (Vercel) do not sleep.
    */
-  async scheduleSnipe(task: ScheduledSnipeTask): Promise<void> {
+  async scheduleSnipe(task: ScheduledSnipeTask): Promise<SnipeExecutionReport | null> {
     const { id, targetTimeMs, rpcUrls } = task;
     this.cancelTask(id);
     this.tasks.set(id, task);
@@ -73,8 +75,7 @@ class PrecisionScheduler {
 
     if (waitMs <= 0) {
       // Immediate execution
-      await this.fireTask(id);
-      return;
+      return await this.fireTask(id);
     }
 
     // Schedule connection pre-warming steps before T-0 (at T-10s, T-5s, T-2s, T-1s, T-500ms)
@@ -88,20 +89,38 @@ class PrecisionScheduler {
       }
     }
 
-    // Precision trigger: wake up 50ms early and spin-wait for exact millisecond
-    const leadTimeMs = Math.min(50, Math.max(0, waitMs));
-    const timerDelay = Math.max(0, waitMs - leadTimeMs);
+    // If drop is within 240 seconds (4 minutes), hold the execution context open to guarantee execution
+    if (waitMs <= 240_000) {
+      return new Promise<SnipeExecutionReport | null>((resolve) => {
+        const leadTimeMs = Math.min(50, Math.max(0, waitMs));
+        const timerDelay = Math.max(0, waitMs - leadTimeMs);
 
-    const triggerTimer = setTimeout(async () => {
-      // Micro-spin wait for exact sub-millisecond precision
-      while (Date.now() < targetTimeMs) {
-        await new Promise((r) => setImmediate(r));
-      }
-      await this.fireTask(id);
-    }, timerDelay);
+        const triggerTimer = setTimeout(async () => {
+          while (Date.now() < targetTimeMs) {
+            await new Promise((r) => setImmediate(r));
+          }
+          const rep = await this.fireTask(id);
+          resolve(rep);
+        }, timerDelay);
 
-    if (triggerTimer.unref) triggerTimer.unref();
-    this.activeTimers.set(id, triggerTimer);
+        this.activeTimers.set(id, triggerTimer);
+      });
+    } else {
+      // Long-term wait (> 4 min): register background timer
+      const leadTimeMs = Math.min(50, Math.max(0, waitMs));
+      const timerDelay = Math.max(0, waitMs - leadTimeMs);
+
+      const triggerTimer = setTimeout(async () => {
+        while (Date.now() < targetTimeMs) {
+          await new Promise((r) => setImmediate(r));
+        }
+        await this.fireTask(id);
+      }, timerDelay);
+
+      if (triggerTimer.unref) triggerTimer.unref();
+      this.activeTimers.set(id, triggerTimer);
+      return null;
+    }
   }
 
   /**
@@ -119,6 +138,15 @@ class PrecisionScheduler {
     const t0DeltaMs = fireStartTime - targetTimeMs;
 
     try {
+      // Push an immediate notification to Telegram
+      api.sendMessage(
+        chatId,
+        `🚀 <b>T-0 Mint Window Arrived! Firing Transaction...</b>\n` +
+          `🎯 <b>Collection:</b> ${code(armedSnipe.contractAddress || "SeaDrop")}\n` +
+          `⚡ <i>Blasting pre-signed raw bytes across ${rpcUrls.length} RPCs...</i>`,
+        { parse_mode: "HTML" },
+      ).catch(() => {});
+
       const report = await executeArmedSnipe(
         armedSnipe,
         rpcUrls,
