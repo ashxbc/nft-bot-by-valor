@@ -4,6 +4,7 @@
 // - Wallets table stores ONLY public addresses (0x...). Private keys are NEVER stored in DB.
 // - Mint tasks & activity logs are persisted permanently per user.
 
+import "dotenv/config";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import {
   createCipheriv,
@@ -102,7 +103,13 @@ export interface DbMintTask {
   max_priority_fee: string;
   timing_mode: string;
   target_time?: string;
-  status: "pending" | "armed" | "executing" | "completed" | "failed" | "cancelled";
+  status:
+    | "pending"
+    | "armed"
+    | "executing"
+    | "completed"
+    | "failed"
+    | "cancelled";
   tx_hashes?: string[];
   attempts_run?: number;
   successful_attempt?: number;
@@ -125,28 +132,42 @@ export interface DbActivityLog {
 // ─────────────────────────────────────────────────────────────────────────────
 // SUPABASE CLIENT INITIALIZATION & IN-MEMORY FALLBACK DRIVER
 // ─────────────────────────────────────────────────────────────────────────────
-const SUPABASE_URL = process.env.SUPABASE_URL || "";
-const SUPABASE_KEY =
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  process.env.SUPABASE_ANON_KEY ||
-  process.env.SUPABASE_KEY ||
-  "";
+let supabaseClient: SupabaseClient | null = null;
+let hasLoggedSupabaseStatus = false;
 
-let supabase: SupabaseClient | null = null;
-const isSupabaseConfigured = Boolean(SUPABASE_URL && SUPABASE_KEY);
+export function getSupabase(): SupabaseClient | null {
+  if (supabaseClient) return supabaseClient;
 
-if (isSupabaseConfigured) {
-  try {
-    supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
-      auth: { persistSession: false },
-    });
-    console.log("✅ Connected to Supabase PostgreSQL Database");
-  } catch (err: any) {
-    console.warn("⚠️ Supabase init notice:", err.message);
-    supabase = null;
+  const url = process.env.SUPABASE_URL || "";
+  const key =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    process.env.SUPABASE_KEY ||
+    "";
+
+  if (url && key) {
+    try {
+      supabaseClient = createClient(url, key, {
+        auth: { persistSession: false },
+      });
+      if (!hasLoggedSupabaseStatus) {
+        console.log("✅ Connected to Supabase PostgreSQL Database:", url);
+        hasLoggedSupabaseStatus = true;
+      }
+      return supabaseClient;
+    } catch (err: any) {
+      console.error("❌ Supabase connection error:", err.message);
+      return null;
+    }
   }
-} else {
-  console.log("ℹ️ Supabase credentials not set in .env — using persistent local database driver.");
+
+  if (!hasLoggedSupabaseStatus) {
+    console.log(
+      "ℹ️ SUPABASE_URL / SUPABASE_KEY not detected in environment — operating with in-memory persistence.",
+    );
+    hasLoggedSupabaseStatus = true;
+  }
+  return null;
 }
 
 // In-Memory fallback store for tests / local dev without Supabase credentials
@@ -178,24 +199,30 @@ export async function upsertUser(user: {
   const record: DbUser = {
     telegram_id: user.telegramId,
     username: user.username !== undefined ? user.username : existing?.username,
-    first_name: user.firstName !== undefined ? user.firstName : existing?.first_name,
+    first_name:
+      user.firstName !== undefined ? user.firstName : existing?.first_name,
     custom_rpc_encrypted: customRpcEncrypted,
     max_fee_per_gas: user.maxFeePerGas || existing?.max_fee_per_gas || "0.1",
-    max_priority_fee: user.maxPriorityFee || existing?.max_priority_fee || "0.01",
-    gas_safety_cap: user.gasSafetyCap !== undefined ? user.gasSafetyCap : (existing?.gas_safety_cap ?? true),
+    max_priority_fee:
+      user.maxPriorityFee || existing?.max_priority_fee || "0.01",
+    gas_safety_cap:
+      user.gasSafetyCap !== undefined
+        ? user.gasSafetyCap
+        : (existing?.gas_safety_cap ?? true),
     active_chain: user.activeChain || existing?.active_chain || "robinhood",
     updated_at: new Date().toISOString(),
   };
 
-  if (supabase) {
-    const { data, error } = await supabase
+  const client = getSupabase();
+  if (client) {
+    const { data, error } = await client
       .from("users")
       .upsert(record, { onConflict: "telegram_id" })
       .select()
       .single();
 
     if (error) {
-      console.warn("⚠️ Supabase upsertUser error:", error.message);
+      console.error("❌ Supabase upsertUser error:", error.message, "(Hint: ensure supabase_schema.sql was run in Supabase SQL editor)");
     } else if (data) {
       return data as DbUser;
     }
@@ -206,8 +233,9 @@ export async function upsertUser(user: {
 }
 
 export async function getUser(telegramId: number): Promise<DbUser | null> {
-  if (supabase) {
-    const { data, error } = await supabase
+  const client = getSupabase();
+  if (client) {
+    const { data, error } = await client
       .from("users")
       .select("*")
       .eq("telegram_id", telegramId)
@@ -233,13 +261,19 @@ export async function addWalletAddress(
   // Ensure user exists first
   await upsertUser({ telegramId });
 
-  if (supabase) {
-    const { error } = await supabase
+  const client = getSupabase();
+  if (client) {
+    const { error } = await client
       .from("wallets")
-      .upsert({ user_id: telegramId, address: checksummed }, { onConflict: "user_id,address" });
+      .upsert(
+        { user_id: telegramId, address: checksummed },
+        { onConflict: "user_id,address" },
+      );
 
     if (error) {
-      console.warn("⚠️ Supabase addWalletAddress error:", error.message);
+      console.error("❌ Supabase addWalletAddress error:", error.message, "(Hint: ensure supabase_schema.sql was run in Supabase SQL editor)");
+    } else {
+      console.log(`✅ Saved public wallet ${checksummed.slice(0, 10)}... for user ${telegramId} in Supabase`);
     }
   }
 
@@ -252,9 +286,12 @@ export async function addWalletAddress(
   return true;
 }
 
-export async function getWalletAddresses(telegramId: number): Promise<string[]> {
-  if (supabase) {
-    const { data, error } = await supabase
+export async function getWalletAddresses(
+  telegramId: number,
+): Promise<string[]> {
+  const client = getSupabase();
+  if (client) {
+    const { data, error } = await client
       .from("wallets")
       .select("address")
       .eq("user_id", telegramId)
@@ -275,8 +312,9 @@ export async function deleteWalletAddress(
 ): Promise<boolean> {
   const checksummed = address.toLowerCase();
 
-  if (supabase) {
-    await supabase
+  const client = getSupabase();
+  if (client) {
+    await client
       .from("wallets")
       .delete()
       .eq("user_id", telegramId)
@@ -291,8 +329,9 @@ export async function deleteWalletAddress(
 }
 
 export async function clearWalletAddresses(telegramId: number): Promise<void> {
-  if (supabase) {
-    await supabase.from("wallets").delete().eq("user_id", telegramId);
+  const client = getSupabase();
+  if (client) {
+    await client.from("wallets").delete().eq("user_id", telegramId);
   }
   memoryWallets.delete(telegramId);
 }
@@ -301,10 +340,15 @@ export async function clearWalletAddresses(telegramId: number): Promise<void> {
 // MINT TASK MANAGEMENT
 // ─────────────────────────────────────────────────────────────────────────────
 export async function createMintTask(task: DbMintTask): Promise<void> {
-  if (supabase) {
-    const { error } = await supabase.from("mint_tasks").upsert(task, { onConflict: "id" });
+  const client = getSupabase();
+  if (client) {
+    const { error } = await client
+      .from("mint_tasks")
+      .upsert(task, { onConflict: "id" });
     if (error) {
-      console.warn("⚠️ Supabase createMintTask error:", error.message);
+      console.error("❌ Supabase createMintTask error:", error.message);
+    } else {
+      console.log(`✅ Saved mint task ${task.id} in Supabase (Status: ${task.status})`);
     }
   }
   memoryTasks.set(task.id, { ...task });
@@ -319,10 +363,14 @@ export async function updateMintTask(
     updated_at: new Date().toISOString(),
   };
 
-  if (supabase) {
-    const { error } = await supabase.from("mint_tasks").update(payload).eq("id", taskId);
+  const client = getSupabase();
+  if (client) {
+    const { error } = await client
+      .from("mint_tasks")
+      .update(payload)
+      .eq("id", taskId);
     if (error) {
-      console.warn("⚠️ Supabase updateMintTask error:", error.message);
+      console.error("❌ Supabase updateMintTask error:", error.message);
     }
   }
 
@@ -333,8 +381,9 @@ export async function updateMintTask(
 }
 
 export async function getMintTask(taskId: string): Promise<DbMintTask | null> {
-  if (supabase) {
-    const { data, error } = await supabase
+  const client = getSupabase();
+  if (client) {
+    const { data, error } = await client
       .from("mint_tasks")
       .select("*")
       .eq("id", taskId)
@@ -348,9 +397,12 @@ export async function getMintTask(taskId: string): Promise<DbMintTask | null> {
   return memoryTasks.get(taskId) || null;
 }
 
-export async function getUserActiveTasks(telegramId: number): Promise<DbMintTask[]> {
-  if (supabase) {
-    const { data, error } = await supabase
+export async function getUserActiveTasks(
+  telegramId: number,
+): Promise<DbMintTask[]> {
+  const client = getSupabase();
+  if (client) {
+    const { data, error } = await client
       .from("mint_tasks")
       .select("*")
       .eq("user_id", telegramId)
@@ -366,7 +418,9 @@ export async function getUserActiveTasks(telegramId: number): Promise<DbMintTask
   for (const t of memoryTasks.values()) {
     if (
       t.user_id === telegramId &&
-      (t.status === "pending" || t.status === "armed" || t.status === "executing")
+      (t.status === "pending" ||
+        t.status === "armed" ||
+        t.status === "executing")
     ) {
       list.push(t);
     }
@@ -391,9 +445,10 @@ export async function logActivity(
     created_at: new Date().toISOString(),
   };
 
-  if (supabase) {
+  const client = getSupabase();
+  if (client) {
     try {
-      await supabase.from("activity_logs").insert(entry);
+      await client.from("activity_logs").insert(entry);
     } catch {}
   }
 
@@ -410,8 +465,9 @@ export async function getUserLogs(
   userId: number,
   limit: number = 20,
 ): Promise<DbActivityLog[]> {
-  if (supabase) {
-    const { data, error } = await supabase
+  const client = getSupabase();
+  if (client) {
+    const { data, error } = await client
       .from("activity_logs")
       .select("*")
       .eq("user_id", userId)

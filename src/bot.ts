@@ -42,11 +42,7 @@ import {
   logActivity,
   decryptSensitive,
 } from "./db";
-import {
-  scheduleSnipeJob,
-  cancelSnipeJob,
-  cancelAllUserJobs,
-} from "./queue";
+import { scheduleSnipeJob, cancelSnipeJob, cancelAllUserJobs } from "./queue";
 import {
   BOT_COMMANDS,
   esc,
@@ -137,12 +133,18 @@ bot.use(async (ctx, next) => {
       const dbUser = await getUser(chatId);
       if (dbUser) {
         if (dbUser.custom_rpc_encrypted && !ctx.session.settings.customRpc) {
-          ctx.session.settings.customRpc = decryptSensitive(dbUser.custom_rpc_encrypted);
+          ctx.session.settings.customRpc = decryptSensitive(
+            dbUser.custom_rpc_encrypted,
+          );
         }
-        if (dbUser.max_fee_per_gas) ctx.session.settings.maxFeePerGas = dbUser.max_fee_per_gas;
-        if (dbUser.max_priority_fee) ctx.session.settings.maxPriorityFee = dbUser.max_priority_fee;
-        if (dbUser.active_chain) ctx.session.settings.activeChain = dbUser.active_chain;
-        if (dbUser.gas_safety_cap !== undefined) ctx.session.settings.gasSafetyCap = dbUser.gas_safety_cap;
+        if (dbUser.max_fee_per_gas)
+          ctx.session.settings.maxFeePerGas = dbUser.max_fee_per_gas;
+        if (dbUser.max_priority_fee)
+          ctx.session.settings.maxPriorityFee = dbUser.max_priority_fee;
+        if (dbUser.active_chain)
+          ctx.session.settings.activeChain = dbUser.active_chain;
+        if (dbUser.gas_safety_cap !== undefined)
+          ctx.session.settings.gasSafetyCap = dbUser.gas_safety_cap;
       }
       const dbWallets = await getWalletAddresses(chatId);
       if (dbWallets && dbWallets.length > 0) {
@@ -427,9 +429,12 @@ bot.callbackQuery("wallet_clear_confirmed", async (ctx) => {
     await logActivity(chatId, "Cleared all wallets", "info");
   }
   await ctx.answerCallbackQuery({ text: "All wallets cleared" });
-  await ctx.reply("🗑️ All wallets have been cleared from memory and database.", {
-    reply_markup: getWalletsKeyboard(false),
-  });
+  await ctx.reply(
+    "🗑️ All wallets have been cleared from memory and database.",
+    {
+      reply_markup: getWalletsKeyboard(false),
+    },
+  );
 });
 
 // Navigation: Settings Menu
@@ -453,6 +458,11 @@ bot.callbackQuery("menu_settings", async (ctx) => {
 // Settings: Reset RPC to Default
 bot.callbackQuery("reset_rpc_action", async (ctx) => {
   ctx.session.settings.customRpc = "";
+  const chatId = ctx.chat?.id;
+  if (chatId) {
+    await upsertUser({ telegramId: chatId, customRpc: "" });
+    await logActivity(chatId, "Reset custom RPC to default", "info");
+  }
   await ctx.answerCallbackQuery({ text: "Custom RPC removed" });
   const text = renderSettingsText(ctx.session);
   try {
@@ -471,6 +481,13 @@ bot.callbackQuery("reset_rpc_action", async (ctx) => {
 // Settings: Toggle Safety Cap
 bot.callbackQuery("toggle_safety_action", async (ctx) => {
   ctx.session.settings.gasSafetyCap = !ctx.session.settings.gasSafetyCap;
+  const chatId = ctx.chat?.id;
+  if (chatId) {
+    await upsertUser({
+      telegramId: chatId,
+      gasSafetyCap: ctx.session.settings.gasSafetyCap,
+    });
+  }
   const state = ctx.session.settings.gasSafetyCap ? "enabled" : "disabled";
   await ctx.answerCallbackQuery({ text: `Gas safety cap ${state}` });
 
@@ -519,8 +536,13 @@ bot.callbackQuery("set_chain_prompt", async (ctx) => {
 bot.callbackQuery(/^select_chain_(.+)$/, async (ctx) => {
   const chainKey = ctx.match[1];
   const chain = resolveChain(chainKey);
+  const chatId = ctx.chat?.id;
   if (chain) {
     ctx.session.settings.activeChain = chain.key;
+    if (chatId) {
+      await upsertUser({ telegramId: chatId, activeChain: chain.key });
+      await logActivity(chatId, `Switched network to ${chain.name}`, "info");
+    }
     await ctx.answerCallbackQuery({
       text: `Network switched to ${chain.name}`,
     });
@@ -922,7 +944,11 @@ async function promptAddWallet(ctx: Context & SessionFlavor<UserSession>) {
 
       // Save public address to Supabase (Zero private keys saved!)
       await addWalletAddress(chatId, wallet.address);
-      await logActivity(chatId, `Added wallet ${wallet.address.slice(0, 10)}...`, "info");
+      await logActivity(
+        chatId,
+        `Added wallet ${wallet.address.slice(0, 10)}...`,
+        "info",
+      );
 
       await msgCtx.reply(
         `✅ <b>Wallet added successfully!</b>\n\nAddress: ${code(wallet.address)}`,
@@ -1398,7 +1424,9 @@ async function executeConfirmedSnipe(
     max_fee_per_gas: wizard.maxFeePerGas || sess.settings.maxFeePerGas,
     max_priority_fee: wizard.maxPriorityFee || sess.settings.maxPriorityFee,
     timing_mode: timingMode,
-    target_time: isImmediate ? new Date().toISOString() : scheduledTime.toISOString(),
+    target_time: isImmediate
+      ? new Date().toISOString()
+      : scheduledTime.toISOString(),
     status: isImmediate ? "executing" : "armed",
     attempts_run: 0,
   });
@@ -1531,6 +1559,10 @@ async function promptSetRpc(ctx: Context & SessionFlavor<UserSession>) {
 
     if (input.toLowerCase() === "default" || input.toLowerCase() === "clear") {
       ctx.session.settings.customRpc = "";
+      if (chatId) {
+        await upsertUser({ telegramId: chatId, customRpc: "" });
+        await logActivity(chatId, "Cleared custom RPC", "info");
+      }
       await msgCtx.reply("✅ Custom RPC cleared.", {
         reply_markup: getSettingsKeyboard(ctx.session),
       });
@@ -1544,6 +1576,10 @@ async function promptSetRpc(ctx: Context & SessionFlavor<UserSession>) {
       }
 
       ctx.session.settings.customRpc = input;
+      if (chatId) {
+        await upsertUser({ telegramId: chatId, customRpc: input });
+        await logActivity(chatId, "Saved personal Alchemy RPC endpoint", "info");
+      }
       const masked = maskRpcUrl(input);
 
       let notice = "";
@@ -1588,6 +1624,10 @@ async function promptSetMaxFee(ctx: Context & SessionFlavor<UserSession>) {
       return;
     }
     ctx.session.settings.maxFeePerGas = val.toString();
+    if (chatId) {
+      await upsertUser({ telegramId: chatId, maxFeePerGas: val.toString() });
+      await logActivity(chatId, `Set max fee to ${val} Gwei`, "info");
+    }
     await msgCtx.reply(`✅ Max fee set to ${val} Gwei`, {
       reply_markup: getSettingsKeyboard(ctx.session),
     });
@@ -1609,6 +1649,10 @@ async function promptSetPriority(ctx: Context & SessionFlavor<UserSession>) {
       return;
     }
     ctx.session.settings.maxPriorityFee = val.toString();
+    if (chatId) {
+      await upsertUser({ telegramId: chatId, maxPriorityFee: val.toString() });
+      await logActivity(chatId, `Set priority fee to ${val} Gwei`, "info");
+    }
     await msgCtx.reply(`✅ Priority fee set to ${val} Gwei`, {
       reply_markup: getSettingsKeyboard(ctx.session),
     });

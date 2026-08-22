@@ -100,9 +100,13 @@ function assert(condition: boolean, name: string, detail: string = "") {
 }
 
 async function runTests() {
-  console.log("\n===============================================================================");
+  console.log(
+    "\n===============================================================================",
+  );
   console.log("🧪 SUPABASE POSTGRESQL + BULLMQ + PERSISTENT WORKER TEST SUITE");
-  console.log("===============================================================================\n");
+  console.log(
+    "===============================================================================\n",
+  );
 
   const mockPort = 8991;
   await createMockRpc(mockPort);
@@ -116,12 +120,19 @@ async function runTests() {
   // 1. SUPABASE DATABASE & ZERO PRIVATE KEY STORAGE
   // ─────────────────────────────────────────────────────────────────────────────
   console.log("▶ TEST 1: Supabase User Profile & AES-256-GCM RPC Encryption");
-  const secretAlchemyUrl = "https://arb-sepolia.g.alchemy.com/v2/super-secret-key-12345";
+  const secretAlchemyUrl =
+    "https://arb-sepolia.g.alchemy.com/v2/super-secret-key-12345";
   const encryptedRpc = encryptSensitive(secretAlchemyUrl);
   const decryptedRpc = decryptSensitive(encryptedRpc);
 
-  assert(encryptedRpc !== secretAlchemyUrl, "RPC URL is encrypted (not plain text)");
-  assert(decryptedRpc === secretAlchemyUrl, "RPC URL correctly decrypted with AES-256-GCM");
+  assert(
+    encryptedRpc !== secretAlchemyUrl,
+    "RPC URL is encrypted (not plain text)",
+  );
+  assert(
+    decryptedRpc === secretAlchemyUrl,
+    "RPC URL correctly decrypted with AES-256-GCM",
+  );
 
   const createdUser = await upsertUser({
     telegramId: testUserId,
@@ -140,19 +151,37 @@ async function runTests() {
   assert(fetchedUser?.max_fee_per_gas === "0.2", "Max fee setting persisted");
   console.log(`  📊 User ${testUserId} persisted with encrypted RPC.\n`);
 
-  console.log("▶ TEST 2: Public Wallet Management (Strict Zero Private Key Storage)");
+  console.log(
+    "▶ TEST 2: Public Wallet Management (Strict Zero Private Key Storage)",
+  );
   await addWalletAddress(testUserId, testWallet.address);
   await addWalletAddress(testUserId, testWallet2.address);
 
   const storedAddresses = await getWalletAddresses(testUserId);
-  assert(storedAddresses.length === 2, "Both public wallet addresses stored", `Count: ${storedAddresses.length}`);
-  assert(storedAddresses.includes(testWallet.address.toLowerCase()), "Wallet 1 public address present");
-  assert(storedAddresses.includes(testWallet2.address.toLowerCase()), "Wallet 2 public address present");
+  assert(
+    storedAddresses.length === 2,
+    "Both public wallet addresses stored",
+    `Count: ${storedAddresses.length}`,
+  );
+  assert(
+    storedAddresses.includes(testWallet.address.toLowerCase()),
+    "Wallet 1 public address present",
+  );
+  assert(
+    storedAddresses.includes(testWallet2.address.toLowerCase()),
+    "Wallet 2 public address present",
+  );
 
   // Verify private key is NEVER in database
   const jsonDump = JSON.stringify(storedAddresses);
-  assert(!jsonDump.includes(testWallet.privateKey), "SECURITY: Private key 1 NEVER stored in DB");
-  assert(!jsonDump.includes(testWallet2.privateKey), "SECURITY: Private key 2 NEVER stored in DB");
+  assert(
+    !jsonDump.includes(testWallet.privateKey),
+    "SECURITY: Private key 1 NEVER stored in DB",
+  );
+  assert(
+    !jsonDump.includes(testWallet2.privateKey),
+    "SECURITY: Private key 2 NEVER stored in DB",
+  );
 
   await deleteWalletAddress(testUserId, testWallet2.address);
   const remainingAddresses = await getWalletAddresses(testUserId);
@@ -186,12 +215,18 @@ async function runTests() {
   assert(task?.status === "armed", "Task status is 'armed'");
 
   const activeTasks = await getUserActiveTasks(testUserId);
-  assert(activeTasks.some((t) => t.id === taskId), "Task listed in user active tasks");
+  assert(
+    activeTasks.some((t) => t.id === taskId),
+    "Task listed in user active tasks",
+  );
 
   await logActivity(testUserId, "Test activity log message", "info", taskId);
   const logs = await getUserLogs(testUserId);
   assert(logs.length >= 1, "Activity log persisted");
-  assert(logs[0].message === "Test activity log message", "Activity log content matched");
+  assert(
+    logs[0].message === "Test activity log message",
+    "Activity log content matched",
+  );
   console.log(`  📊 Task & Activity logging verified.\n`);
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -250,7 +285,9 @@ async function runTests() {
   // ─────────────────────────────────────────────────────────────────────────────
   // 4. PERSISTENT WORKER T-0 EXECUTION
   // ─────────────────────────────────────────────────────────────────────────────
-  console.log("▶ TEST 5: Standalone Worker T-0 Pre-Signed Execution & Status Sync");
+  console.log(
+    "▶ TEST 5: Standalone Worker T-0 Pre-Signed Execution & Status Sync",
+  );
   const executeTaskId = `task_exec_${Date.now()}`;
 
   await createMintTask({
@@ -287,17 +324,32 @@ async function runTests() {
   assert(report.successfulAttempt === 1, "Mint succeeded on Attempt 1");
 
   const completedTask = await getMintTask(executeTaskId);
-  assert(completedTask?.status === "completed", "Supabase task record updated to 'completed'");
-  assert(completedTask?.successful_attempt === 1, "Supabase task successful_attempt recorded");
-  assert(Boolean(completedTask?.tx_hashes && completedTask.tx_hashes.length > 0), "Supabase task TX hashes recorded");
-  console.log(`  📊 Worker execution & Supabase sync completed in ${report.totalExecutionMs}ms.\n`);
+  assert(
+    completedTask?.status === "completed",
+    "Supabase task record updated to 'completed'",
+  );
+  assert(
+    completedTask?.successful_attempt === 1,
+    "Supabase task successful_attempt recorded",
+  );
+  assert(
+    Boolean(completedTask?.tx_hashes && completedTask.tx_hashes.length > 0),
+    "Supabase task TX hashes recorded",
+  );
+  console.log(
+    `  📊 Worker execution & Supabase sync completed in ${report.totalExecutionMs}ms.\n`,
+  );
 
   // ─────────────────────────────────────────────────────────────────────────────
   // SUMMARY
   // ─────────────────────────────────────────────────────────────────────────────
-  console.log("===============================================================================");
+  console.log(
+    "===============================================================================",
+  );
   console.log(`🎉 TEST SUITE COMPLETED: ${passed} passed, ${failed} failed.`);
-  console.log("===============================================================================\n");
+  console.log(
+    "===============================================================================\n",
+  );
 
   for (const s of activeServers) {
     s.close();

@@ -65,3 +65,9 @@ CREATE INDEX IF NOT EXISTS idx_mint_tasks_status ON public.mint_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_mint_tasks_target_time ON public.mint_tasks(target_time);
 CREATE INDEX IF NOT EXISTS idx_activity_logs_user_id ON public.activity_logs(user_id);
 CREATE INDEX IF NOT EXISTS idx_activity_logs_created_at ON public.activity_logs(created_at DESC);
+
+-- DISABLE ROW LEVEL SECURITY (RLS) FOR DIRECT BOT ACCESS
+ALTER TABLE public.users DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.wallets DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.mint_tasks DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.activity_logs DISABLE ROW LEVEL SECURITY;

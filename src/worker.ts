@@ -8,12 +8,7 @@ import {
   warmRpcConnections,
   SnipeExecutionReport,
 } from "./mint";
-import {
-  updateMintTask,
-  logActivity,
-  getUser,
-  decryptSensitive,
-} from "./db";
+import { updateMintTask, logActivity, getUser, decryptSensitive } from "./db";
 import {
   SnipeJobPayload,
   SNIPE_QUEUE_NAME,
@@ -72,7 +67,9 @@ export async function processSnipeJob(
     targetTimeMs,
   } = payload;
 
-  console.log(`🚀 [Worker] Starting T-0 execution for Task ${taskId} (User ${userId})`);
+  console.log(
+    `🚀 [Worker] Starting T-0 execution for Task ${taskId} (User ${userId})`,
+  );
 
   // Pre-warm connections before T-0
   warmRpcConnections(rpcUrls).catch(() => {});
@@ -196,7 +193,9 @@ export async function processSnipeJob(
       status: "failed",
       tx_hashes: txHashes,
       attempts_run: report.attemptsRun,
-      error: report.error || "All sequential attempts exhausted without confirmation",
+      error:
+        report.error ||
+        "All sequential attempts exhausted without confirmation",
     });
 
     await logActivity(
@@ -241,7 +240,9 @@ export function startWorker(): Worker<SnipeJobPayload> | null {
 
   const conn = getRedisConnection();
   if (!conn) {
-    console.log("ℹ️ REDIS_URL not configured — BullMQ persistent worker standby (in-memory scheduler active)");
+    console.log(
+      "ℹ️ REDIS_URL not configured — BullMQ persistent worker standby (in-memory scheduler active)",
+    );
     return null;
   }
 
@@ -262,7 +263,9 @@ export function startWorker(): Worker<SnipeJobPayload> | null {
     );
 
     snipeWorker.on("ready", () => {
-      console.log("⚡ [BullMQ Worker] Worker is READY and listening for T-0 jobs");
+      console.log(
+        "⚡ [BullMQ Worker] Worker is READY and listening for T-0 jobs",
+      );
     });
 
     snipeWorker.on("completed", (job) => {
