@@ -223,7 +223,11 @@ export async function upsertUser(user: {
       .single();
 
     if (error) {
-      console.error("❌ Supabase upsertUser error:", error.message, "(Hint: ensure supabase_schema.sql was run in Supabase SQL editor)");
+      console.error(
+        "❌ Supabase upsertUser error:",
+        error.message,
+        "(Hint: ensure supabase_schema.sql was run in Supabase SQL editor)",
+      );
     } else if (data) {
       return data as DbUser;
     }
@@ -284,7 +288,9 @@ export async function addWalletAddress(
     if (error) {
       console.error("❌ Supabase addWalletAddress error:", error.message);
     } else {
-      console.log(`✅ Saved public wallet ${normalized.slice(0, 10)}... for user ${telegramId} in Supabase`);
+      console.log(
+        `✅ Saved public wallet ${normalized.slice(0, 10)}... for user ${telegramId} in Supabase`,
+      );
     }
   }
 
@@ -392,7 +398,9 @@ export async function createMintTask(task: DbMintTask): Promise<void> {
     if (error) {
       console.error("❌ Supabase createMintTask error:", error.message);
     } else {
-      console.log(`✅ Saved mint task ${task.id} in Supabase (Status: ${task.status})`);
+      console.log(
+        `✅ Saved mint task ${task.id} in Supabase (Status: ${task.status})`,
+      );
     }
   }
   memoryTasks.set(task.id, { ...task });

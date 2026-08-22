@@ -220,13 +220,23 @@ class PrecisionScheduler {
             `⚡ Built by <a href="https://x.com/valor0x">Valor</a>`,
           getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
         );
+      } else {
         const attemptLines =
           report.results && report.results.length > 0
             ? report.results
-                .map(
-                  (r) =>
-                    `  • Attempt ${r.attempt}: <b>${r.status.toUpperCase()}</b>\n    └ <i>${esc(r.error || "Mempool inclusion timeout — no receipt")}</i>${r.txHash ? ` — ${link("View TX", r.explorerUrl)}` : ""}`,
-                )
+                .map((r) => {
+                  let statusDesc = "";
+                  if (r.status === "confirmed") {
+                    statusDesc = `✅ Confirmed in block ${r.blockNumber}`;
+                  } else if (r.status === "failed") {
+                    statusDesc = `❌ Reverted in block ${r.blockNumber}`;
+                  } else if (r.status === "rejected") {
+                    statusDesc = `⚠️ RPC Rejected: ${esc(r.error || "Execution error")}`;
+                  } else {
+                    statusDesc = `⏳ Mempool timeout (No receipt in window)`;
+                  }
+                  return `  • Attempt ${r.attempt}: <b>${r.status.toUpperCase()}</b>\n    └ <i>${statusDesc}</i>${r.txHash ? ` — ${link("View TX", r.explorerUrl)}` : ""}`;
+                })
                 .join("\n")
             : "  • ⚠️ No transactions could be broadcast. (Check wallet balance and RPC endpoint)";
 

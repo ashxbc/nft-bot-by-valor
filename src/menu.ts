@@ -250,17 +250,13 @@ export function renderStartText(sess: UserSession): string {
 
 export function renderWalletsText(sess: UserSession): string {
   const uniqueAddresses = Array.from(
-    new Map(
-      sess.walletAddresses.map((a) => [a.toLowerCase(), a]),
-    ).values(),
+    new Map(sess.walletAddresses.map((a) => [a.toLowerCase(), a])).values(),
   );
   const walletCount = uniqueAddresses.length;
   const walletList =
     walletCount === 0
       ? "No wallets loaded. Private keys are encrypted in-memory (AES-256-GCM) and never written to disk."
-      : uniqueAddresses
-          .map((addr, i) => `${i + 1}. ${code(addr)}`)
-          .join("\n");
+      : uniqueAddresses.map((addr, i) => `${i + 1}. ${code(addr)}`).join("\n");
 
   return (
     `👤 <b>Wallet Manager</b>\n\n` +
