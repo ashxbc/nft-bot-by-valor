@@ -250,7 +250,7 @@ export async function preSignAllAttempts(
 
 /**
  * Concurrently blasts pre-signed raw transaction bytes across ALL configured RPC endpoints.
- * Preparation overhead at T-0: 0ms.
+ * Fast-path resolves the moment the first RPC accepts without waiting for slow backup endpoints.
  */
 export async function blastPreparedTransactions(
   prepared: PreparedTransaction[],
@@ -620,7 +620,6 @@ export async function executeSnipe(
   maxAttempts: number = 3,
   onProgress?: SnipeProgressCallback,
 ): Promise<SnipeExecutionReport> {
-  // Pre-sign all 3 attempts in parallel
   if (onProgress) {
     await onProgress({
       phase: "preparing",

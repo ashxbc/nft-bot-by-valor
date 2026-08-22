@@ -41,6 +41,8 @@ import {
   getMainMenuKeyboard,
   getWalletsKeyboard,
   getSettingsKeyboard,
+  getArmedSnipeKeyboard,
+  getLiveExecutionKeyboard,
   getStatusKeyboard,
   getHelpKeyboard,
   getSnipeTimingKeyboard,
@@ -1327,6 +1329,7 @@ async function executeConfirmedSnipe(
   const targetTimeMs = isImmediate ? Date.now() : scheduledTime.getTime();
 
   if (isImmediate) {
+    // ═══════════════ IMMEDIATE FIRE ═══════════════
     await updateLiveCard(
       ctx.api,
       chatId,
@@ -1334,7 +1337,9 @@ async function executeConfirmedSnipe(
       `🚀 <b>Firing Transaction Instantly</b>\n\n` +
         `🎯 <b>Collection:</b> ${code(contractAddress)}\n` +
         `🔢 <b>Quantity:</b> <code>${quantity}</code>\n` +
-        `⚡ <i>Pre-signed bytes ready. Blasting across ${rpcUrls.length} RPCs...</i>`,
+        `⚡ <i>Pre-signed bytes ready. Blasting across ${rpcUrls.length} RPCs...</i>\n` +
+        `🟢 <i>Live event stream active — no action needed.</i>`,
+      getLiveExecutionKeyboard(),
     );
 
     await precisionScheduler.scheduleSnipe({
@@ -1350,6 +1355,7 @@ async function executeConfirmedSnipe(
       api: ctx.api,
     });
   } else {
+    // ═══════════════ SCHEDULED PRE-SIGNED (T-0) ═══════════════
     const waitMs = targetTimeMs - Date.now();
     const modeTitle =
       timingMode === "mint_start" ? "⚡ Mint Start (T-0)" : "⏰ Specific Time";
@@ -1363,13 +1369,13 @@ async function executeConfirmedSnipe(
         `• <b>Target Time:</b> <code>${esc(scheduledTime.toISOString())}</code>\n` +
         `• <b>Waiting:</b> <b>${formatDuration(Math.max(0, Math.ceil(waitMs / 1000)))}</b>\n\n` +
         `⚡ <b>Ultra-Low Latency Pipeline Ready:</b>\n` +
-        `  ✅ All 3 execution attempts pre-signed into memory\n` +
+        `  ✅ All 3 execution attempts pre-signed in memory\n` +
         `  ✅ Persistent keep-alive sockets pre-warming\n` +
         `  ✅ 0ms preparation latency guaranteed at T-0\n` +
-        `  ✅ Concurrent blasting across ${rpcUrls.length} RPCs\n` +
+        `  ✅ Parallel blast across ${rpcUrls.length} RPCs\n` +
         `  ✅ Sub-second 200ms receipt confirmation\n\n` +
-        `<i>No action required. Sit back and watch live updates here!</i>`,
-      getStatusKeyboard(),
+        `🟢 <i>Fully autonomous — the bot will fire and stream live updates automatically. Do not click anything!</i>`,
+      getArmedSnipeKeyboard(),
     );
 
     // Schedule precision T-0 execution

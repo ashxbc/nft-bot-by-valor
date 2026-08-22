@@ -8,7 +8,13 @@ import {
   SnipeExecutionReport,
 } from "./mint";
 import { UserSession, ActiveSnipe } from "./session";
-import { esc, code, link, getStatusKeyboard, getMainMenuKeyboard } from "./menu";
+import {
+  esc,
+  code,
+  link,
+  getLiveExecutionKeyboard,
+  getMainMenuKeyboard,
+} from "./menu";
 
 export interface ScheduledSnipeTask {
   id: string;
@@ -27,7 +33,6 @@ export interface ScheduledSnipeTask {
 class PrecisionScheduler {
   private tasks = new Map<string, ScheduledSnipeTask>();
   private activeTimers = new Map<string, NodeJS.Timeout>();
-  private warmingIntervals = new Map<string, NodeJS.Timeout>();
 
   /**
    * Helper to update Telegram card in real-time without throwing on duplicate edits.
@@ -56,7 +61,7 @@ class PrecisionScheduler {
    * Arms and registers a pre-signed snipe for autonomous T-0 execution.
    */
   async scheduleSnipe(task: ScheduledSnipeTask): Promise<void> {
-    const { id, targetTimeMs, armedSnipe, rpcUrls, chatId, messageId, api, sess, activeSnipe } = task;
+    const { id, targetTimeMs, rpcUrls } = task;
     this.cancelTask(id);
     this.tasks.set(id, task);
 
@@ -72,14 +77,13 @@ class PrecisionScheduler {
       return;
     }
 
-    // Schedule connection pre-warming steps before T-0 (at T-10s, T-5s, T-2s, T-1s)
+    // Schedule connection pre-warming steps before T-0 (at T-10s, T-5s, T-2s, T-1s, T-500ms)
     const warmingTimes = [10000, 5000, 2000, 1000, 500];
     for (const warmOffset of warmingTimes) {
       if (waitMs > warmOffset) {
         const timer = setTimeout(() => {
           warmRpcConnections(rpcUrls).catch(() => {});
         }, waitMs - warmOffset);
-        // Do not block Node event loop exit
         if (timer.unref) timer.unref();
       }
     }
@@ -91,7 +95,6 @@ class PrecisionScheduler {
     const triggerTimer = setTimeout(async () => {
       // Micro-spin wait for exact sub-millisecond precision
       while (Date.now() < targetTimeMs) {
-        // Yield micro-tick
         await new Promise((r) => setImmediate(r));
       }
       await this.fireTask(id);
@@ -143,7 +146,9 @@ class PrecisionScheduler {
                 `📡 <b>Dispatched to mempool across ${rpcUrls.length} RPCs!</b>\n` +
                 timingInfo +
                 `${txLinks}\n\n` +
-                `⏳ <i>Monitoring on-chain block inclusion (200ms polling)...</i>`,
+                `⏳ <i>Monitoring on-chain block inclusion (200ms polling)...</i>\n` +
+                `🟢 <i>Live event stream active — no action needed.</i>`,
+              getLiveExecutionKeyboard(),
             );
           } else if (progress.phase === "retrying") {
             await this.updateCard(
@@ -152,7 +157,9 @@ class PrecisionScheduler {
               messageId,
               `⚠️ <b>Attempt ${progress.attempt - 1} did not confirm</b>\n\n` +
                 `🎯 <b>Collection:</b> ${code(armedSnipe.contractAddress || "SeaDrop")}\n` +
-                `🔄 <i>Instantly firing pre-signed Attempt ${progress.attempt} with +25% priority fee bump...</i>`,
+                `🔄 <i>Instantly firing pre-signed Attempt ${progress.attempt} with +25% priority fee bump...</i>\n` +
+                `🟢 <i>Live event stream active — no action needed.</i>`,
+              getLiveExecutionKeyboard(),
             );
           }
         },
@@ -177,7 +184,7 @@ class PrecisionScheduler {
             `⏱️ <b>Total Execution Time:</b> <code>${report.totalExecutionMs || 0}ms</code>\n` +
             `🔗 <b>Transaction:</b> ${link(r.txHash.slice(0, 18) + "...", r.explorerUrl)}\n\n` +
             `✅ <i>Mint transaction verified on-chain automatically!</i>`,
-          getStatusKeyboard(),
+          getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
         );
       } else {
         const attemptLines = report.results
@@ -195,7 +202,7 @@ class PrecisionScheduler {
             `🎯 <b>Collection:</b> ${code(armedSnipe.contractAddress || "SeaDrop")}\n\n` +
             `<b>Attempt History:</b>\n${attemptLines}\n\n` +
             `<i>All sequential attempts were exhausted.</i>`,
-          getStatusKeyboard(),
+          getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
         );
       }
 
@@ -241,6 +248,10 @@ class PrecisionScheduler {
 
   getTask(id: string): ScheduledSnipeTask | undefined {
     return this.tasks.get(id);
+  }
+
+  getAllTasks(): ScheduledSnipeTask[] {
+    return Array.from(this.tasks.values());
   }
 }
 

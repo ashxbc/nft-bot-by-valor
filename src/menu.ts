@@ -80,9 +80,7 @@ export function getMainMenuKeyboard(hasRpc: boolean = true): InlineKeyboard {
     .text("📊 Status", "menu_status")
     .row()
     .text("🛑 Cancel Tasks", "menu_cancel")
-    .text("❓ Help", "menu_help")
-    .row()
-    .text("🔄 Refresh Dashboard", "menu_refresh_start");
+    .text("❓ Help", "menu_help");
 
   return kb;
 }
@@ -128,12 +126,21 @@ export function getSettingsKeyboard(sess: UserSession): InlineKeyboard {
   return kb;
 }
 
+export function getArmedSnipeKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("🛑 Cancel Armed Snipe", "menu_cancel")
+    .text("🏠 Main Menu", "menu_start");
+}
+
+export function getLiveExecutionKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("🛑 Abort Snipe", "menu_cancel");
+}
+
 export function getStatusKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
-    .text("🔄 Refresh Status", "status_refresh")
     .text("🛑 Cancel Pending", "menu_cancel")
-    .row()
-    .text("🔙 Main Menu", "menu_start");
+    .text("🏠 Main Menu", "menu_start");
 }
 
 export function getHelpKeyboard(): InlineKeyboard {
