@@ -165,11 +165,11 @@ async function runTests() {
     `Count: ${storedAddresses.length}`,
   );
   assert(
-    storedAddresses.includes(testWallet.address.toLowerCase()),
+    storedAddresses.map((a) => a.toLowerCase()).includes(testWallet.address.toLowerCase()),
     "Wallet 1 public address present",
   );
   assert(
-    storedAddresses.includes(testWallet2.address.toLowerCase()),
+    storedAddresses.map((a) => a.toLowerCase()).includes(testWallet2.address.toLowerCase()),
     "Wallet 2 public address present",
   );
 

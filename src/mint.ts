@@ -181,7 +181,7 @@ export async function prepareWallets(
  * - Attempt 1: Base gas + Base tip
  * - Attempt 2: Base gas + 25% Boosted tip (same nonce, instant replacement)
  * - Attempt 3: Base gas + 50% Boosted tip (same nonce, instant replacement)
- * 
+ *
  * At T-0, 0 signing or network queries occur — already-signed raw bytes are broadcast instantly.
  */
 export async function preSignAllAttempts(
@@ -295,7 +295,8 @@ export async function blastPreparedTransactions(
             (json.error?.message || "").includes("nonce too low")
           ) {
             accepted = true;
-            if (!firstAcceptedTime) firstAcceptedTime = Date.now() - startDispatch;
+            if (!firstAcceptedTime)
+              firstAcceptedTime = Date.now() - startDispatch;
             return true;
           }
           return false;

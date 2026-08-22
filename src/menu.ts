@@ -189,7 +189,18 @@ export function getClearWalletsConfirmKeyboard(): InlineKeyboard {
 
 export function renderStartText(sess: UserSession): string {
   const chain = resolveChain(sess.settings.activeChain);
-  const walletCount = sess.walletAddresses.length;
+  const uniqueAddresses = Array.from(
+    new Map(
+      sess.walletAddresses.map((a) => {
+        try {
+          return [a.toLowerCase(), a];
+        } catch {
+          return [a.toLowerCase(), a];
+        }
+      }),
+    ).values(),
+  );
+  const walletCount = uniqueAddresses.length;
   const activeSnipes = sess.activeSnipes.filter(
     (s) =>
       s.status === "pending" || s.status === "waiting" || s.status === "firing",
@@ -214,7 +225,7 @@ export function renderStartText(sess: UserSession): string {
     walletCount === 0
       ? "⚠️ No wallets loaded. Click <b>Wallets</b> below to add one."
       : `✅ ${walletCount} wallet(s) ready:\n` +
-        sess.walletAddresses
+        uniqueAddresses
           .map(
             (addr, i) =>
               `  ${i + 1}. ${code(addr.slice(0, 10) + "..." + addr.slice(-8))}`,
@@ -238,11 +249,16 @@ export function renderStartText(sess: UserSession): string {
 }
 
 export function renderWalletsText(sess: UserSession): string {
-  const walletCount = sess.walletAddresses.length;
+  const uniqueAddresses = Array.from(
+    new Map(
+      sess.walletAddresses.map((a) => [a.toLowerCase(), a]),
+    ).values(),
+  );
+  const walletCount = uniqueAddresses.length;
   const walletList =
     walletCount === 0
       ? "No wallets loaded. Private keys are encrypted in-memory (AES-256-GCM) and never written to disk."
-      : sess.walletAddresses
+      : uniqueAddresses
           .map((addr, i) => `${i + 1}. ${code(addr)}`)
           .join("\n");
 

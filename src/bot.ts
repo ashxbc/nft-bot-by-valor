@@ -11,6 +11,7 @@ import {
   formatEther,
   JsonRpcProvider,
   isAddress,
+  getAddress,
 } from "ethers";
 import {
   UserSession,
@@ -148,11 +149,24 @@ bot.use(async (ctx, next) => {
       }
       const dbWallets = await getWalletAddresses(chatId);
       if (dbWallets && dbWallets.length > 0) {
-        for (const addr of dbWallets) {
-          if (!ctx.session.walletAddresses.includes(addr)) {
-            ctx.session.walletAddresses.push(addr);
+        const addressMap = new Map<string, string>();
+        for (const addr of ctx.session.walletAddresses) {
+          try {
+            addressMap.set(addr.toLowerCase(), getAddress(addr));
+          } catch {
+            addressMap.set(addr.toLowerCase(), addr);
           }
         }
+        for (const addr of dbWallets) {
+          if (!addressMap.has(addr.toLowerCase())) {
+            try {
+              addressMap.set(addr.toLowerCase(), getAddress(addr));
+            } catch {
+              addressMap.set(addr.toLowerCase(), addr);
+            }
+          }
+        }
+        ctx.session.walletAddresses = Array.from(addressMap.values());
       }
     } catch {}
   }
@@ -937,21 +951,32 @@ async function promptAddWallet(ctx: Context & SessionFlavor<UserSession>) {
 
     try {
       const wallet = new Wallet(key);
+      const normalizedAddr = getAddress(wallet.address);
       const encrypted = encryptWallet(key);
 
-      ctx.session.wallets.push(encrypted);
-      ctx.session.walletAddresses.push(wallet.address);
+      // Check if wallet already exists in session (case-insensitive)
+      const existingIdx = ctx.session.walletAddresses.findIndex(
+        (a) => a.toLowerCase() === normalizedAddr.toLowerCase(),
+      );
+
+      if (existingIdx >= 0) {
+        ctx.session.walletAddresses[existingIdx] = normalizedAddr;
+        ctx.session.wallets[existingIdx] = encrypted;
+      } else {
+        ctx.session.wallets.push(encrypted);
+        ctx.session.walletAddresses.push(normalizedAddr);
+      }
 
       // Save public address to Supabase (Zero private keys saved!)
-      await addWalletAddress(chatId, wallet.address);
+      await addWalletAddress(chatId, normalizedAddr);
       await logActivity(
         chatId,
-        `Added wallet ${wallet.address.slice(0, 10)}...`,
+        `Added wallet ${normalizedAddr.slice(0, 10)}...`,
         "info",
       );
 
       await msgCtx.reply(
-        `✅ <b>Wallet added successfully!</b>\n\nAddress: ${code(wallet.address)}`,
+        `✅ <b>Wallet added successfully!</b>\n\nAddress: ${code(normalizedAddr)}`,
         {
           parse_mode: "HTML",
           reply_markup: getWalletsKeyboard(true),

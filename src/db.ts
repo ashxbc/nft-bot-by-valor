@@ -6,6 +6,7 @@
 
 import "dotenv/config";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { getAddress } from "ethers";
 import {
   createCipheriv,
   createDecipheriv,
@@ -256,24 +257,34 @@ export async function addWalletAddress(
   telegramId: number,
   address: string,
 ): Promise<boolean> {
-  const checksummed = address.toLowerCase();
+  let normalized = address.trim();
+  try {
+    normalized = getAddress(normalized);
+  } catch {}
 
   // Ensure user exists first
   await upsertUser({ telegramId });
 
   const client = getSupabase();
   if (client) {
+    // Delete any case-variations first (e.g. lowercase version) to prevent duplicate entries
+    await client
+      .from("wallets")
+      .delete()
+      .eq("user_id", telegramId)
+      .ilike("address", normalized);
+
     const { error } = await client
       .from("wallets")
       .upsert(
-        { user_id: telegramId, address: checksummed },
+        { user_id: telegramId, address: normalized },
         { onConflict: "user_id,address" },
       );
 
     if (error) {
-      console.error("❌ Supabase addWalletAddress error:", error.message, "(Hint: ensure supabase_schema.sql was run in Supabase SQL editor)");
+      console.error("❌ Supabase addWalletAddress error:", error.message);
     } else {
-      console.log(`✅ Saved public wallet ${checksummed.slice(0, 10)}... for user ${telegramId} in Supabase`);
+      console.log(`✅ Saved public wallet ${normalized.slice(0, 10)}... for user ${telegramId} in Supabase`);
     }
   }
 
@@ -282,7 +293,12 @@ export async function addWalletAddress(
     set = new Set();
     memoryWallets.set(telegramId, set);
   }
-  set.add(checksummed);
+  for (const existing of Array.from(set)) {
+    if (existing.toLowerCase() === normalized.toLowerCase()) {
+      set.delete(existing);
+    }
+  }
+  set.add(normalized);
   return true;
 }
 
@@ -298,19 +314,43 @@ export async function getWalletAddresses(
       .order("created_at", { ascending: true });
 
     if (!error && data) {
-      return data.map((d) => d.address);
+      const addressMap = new Map<string, string>();
+      for (const d of data) {
+        let norm = d.address;
+        try {
+          norm = getAddress(d.address);
+        } catch {}
+        if (!addressMap.has(norm.toLowerCase())) {
+          addressMap.set(norm.toLowerCase(), norm);
+        }
+      }
+      return Array.from(addressMap.values());
     }
   }
 
   const set = memoryWallets.get(telegramId);
-  return set ? Array.from(set) : [];
+  if (!set) return [];
+  const addressMap = new Map<string, string>();
+  for (const a of Array.from(set)) {
+    let norm = a;
+    try {
+      norm = getAddress(a);
+    } catch {}
+    if (!addressMap.has(norm.toLowerCase())) {
+      addressMap.set(norm.toLowerCase(), norm);
+    }
+  }
+  return Array.from(addressMap.values());
 }
 
 export async function deleteWalletAddress(
   telegramId: number,
   address: string,
 ): Promise<boolean> {
-  const checksummed = address.toLowerCase();
+  let normalized = address.trim();
+  try {
+    normalized = getAddress(normalized);
+  } catch {}
 
   const client = getSupabase();
   if (client) {
@@ -318,12 +358,16 @@ export async function deleteWalletAddress(
       .from("wallets")
       .delete()
       .eq("user_id", telegramId)
-      .eq("address", checksummed);
+      .ilike("address", normalized);
   }
 
   const set = memoryWallets.get(telegramId);
   if (set) {
-    set.delete(checksummed);
+    for (const existing of Array.from(set)) {
+      if (existing.toLowerCase() === normalized.toLowerCase()) {
+        set.delete(existing);
+      }
+    }
   }
   return true;
 }
