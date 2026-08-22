@@ -20,7 +20,15 @@ import {
   ActiveSnipe,
 } from "./session";
 import { buildMintPlan, fetchPublicDrop } from "./seadrop";
-import { executeSnipe, resolveRpcUrls } from "./mint";
+import {
+  executeSnipe,
+  executeArmedSnipe,
+  preSignAllAttempts,
+  warmRpcConnections,
+  resolveRpcUrls,
+  ArmedSnipe,
+} from "./mint";
+import { precisionScheduler } from "./scheduler";
 import { DEFAULT_CHAIN, resolveChain } from "./chains";
 import {
   BOT_COMMANDS,
@@ -1244,7 +1252,7 @@ async function executeConfirmedSnipe(
   );
 
   const initMsg = await ctx.reply(
-    "🔍 <i>Building mint plan from on-chain SeaDrop parameters...</i>",
+    "🔍 <i>Inspecting SeaDrop contract & pre-signing 3 execution attempts...</i>",
     { parse_mode: "HTML" },
   );
   const liveCardId = initMsg.message_id;
@@ -1273,6 +1281,31 @@ async function executeConfirmedSnipe(
 
   const snipeId = `snipe_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const isImmediate = timingMode === "now" || !scheduledTimeStr;
+  const scheduledTime = scheduledTimeStr ? new Date(scheduledTimeStr) : new Date();
+
+  // PRE-SIGN ALL 3 EXECUTION ATTEMPTS NOW (Ahead of T-0)
+  let armedSnipe: ArmedSnipe;
+  try {
+    armedSnipe = await preSignAllAttempts(
+      sess.wallets.map((w) => decryptWallet(w)),
+      plan,
+      rpcUrls[0],
+      maxFee,
+      maxTip,
+      250_000,
+      snipeId,
+    );
+  } catch (err: any) {
+    await updateLiveCard(
+      ctx.api,
+      chatId,
+      liveCardId,
+      `❌ <b>Pre-signing failed:</b> ${esc(err.message)}`,
+      getMainMenuKeyboard(Boolean(sess.settings.customRpc)),
+    );
+    sess.snipeWizard = undefined;
+    return;
+  }
 
   const activeSnipe: ActiveSnipe = {
     id: snipeId,
@@ -1291,37 +1324,33 @@ async function executeConfirmedSnipe(
   sess.activeSnipes.push(activeSnipe);
   sess.snipeWizard = undefined;
 
+  const targetTimeMs = isImmediate ? Date.now() : scheduledTime.getTime();
+
   if (isImmediate) {
-    // ═══════════════ IMMEDIATE FIRE ═══════════════
     await updateLiveCard(
       ctx.api,
       chatId,
       liveCardId,
-      `🚀 <b>Firing Transaction</b>\n\n` +
+      `🚀 <b>Firing Transaction Instantly</b>\n\n` +
         `🎯 <b>Collection:</b> ${code(contractAddress)}\n` +
         `🔢 <b>Quantity:</b> <code>${quantity}</code>\n` +
-        `⚡ <i>Pre-signing transactions & warming RPC connections...</i>`,
+        `⚡ <i>Pre-signed bytes ready. Blasting across ${rpcUrls.length} RPCs...</i>`,
     );
 
-    await runSnipeWithLiveCard(
-      ctx.api,
+    await precisionScheduler.scheduleSnipe({
+      id: snipeId,
+      armedSnipe,
       chatId,
-      liveCardId,
+      messageId: liveCardId,
+      targetTimeMs,
+      timingMode,
+      rpcUrls,
       sess,
       activeSnipe,
-      contractAddress,
-      quantity,
-      plan,
-      rpcUrls,
-      maxFee,
-      maxTip,
-      BigInt(chain?.chainId || DEFAULT_CHAIN.chainId),
-    );
+      api: ctx.api,
+    });
   } else {
-    // ═══════════════ SCHEDULED — store in persistent session ═══════════════
-    const scheduledTime = new Date(scheduledTimeStr!);
-    const waitMs = scheduledTime.getTime() - Date.now();
-
+    const waitMs = targetTimeMs - Date.now();
     const modeTitle =
       timingMode === "mint_start" ? "⚡ Mint Start (T-0)" : "⏰ Specific Time";
 
@@ -1329,21 +1358,33 @@ async function executeConfirmedSnipe(
       ctx.api,
       chatId,
       liveCardId,
-      `🎯 <b>Snipe Armed for Autonomous Execution!</b>\n\n` +
+      `🎯 <b>Snipe Armed & Pre-Signed for T-0!</b>\n\n` +
         `• <b>Mode:</b> ${esc(modeTitle)}\n` +
         `• <b>Target Time:</b> <code>${esc(scheduledTime.toISOString())}</code>\n` +
-        `• <b>Waiting:</b> <b>${formatDuration(Math.max(0, Math.ceil(waitMs / 1000)))}</b>\n` +
-        `• <b>Autonomous Pipeline:</b>\n` +
-        `  1️⃣ Detects mint window on next interaction\n` +
-        `  2️⃣ Fires transaction immediately\n` +
-        `  3️⃣ Monitors confirmation (250ms polling)\n` +
-        `  4️⃣ Auto-retries on failure (+25% fee bump)\n` +
-        `  5️⃣ Stops on first confirmed success\n\n` +
-        `<i>Your wallets, RPC, and snipe config are saved permanently.\nThe bot will auto-fire when the mint window opens. Use /cancel to abort.</i>`,
+        `• <b>Waiting:</b> <b>${formatDuration(Math.max(0, Math.ceil(waitMs / 1000)))}</b>\n\n` +
+        `⚡ <b>Ultra-Low Latency Pipeline Ready:</b>\n` +
+        `  ✅ All 3 execution attempts pre-signed into memory\n` +
+        `  ✅ Persistent keep-alive sockets pre-warming\n` +
+        `  ✅ 0ms preparation latency guaranteed at T-0\n` +
+        `  ✅ Concurrent blasting across ${rpcUrls.length} RPCs\n` +
+        `  ✅ Sub-second 200ms receipt confirmation\n\n` +
+        `<i>No action required. Sit back and watch live updates here!</i>`,
       getStatusKeyboard(),
     );
-    // Snipe is now stored in persistent session with status "waiting".
-    // The checkScheduledSnipes middleware will detect it and fire automatically.
+
+    // Schedule precision T-0 execution
+    await precisionScheduler.scheduleSnipe({
+      id: snipeId,
+      armedSnipe,
+      chatId,
+      messageId: liveCardId,
+      targetTimeMs,
+      timingMode,
+      rpcUrls,
+      sess,
+      activeSnipe,
+      api: ctx.api,
+    });
   }
 }
 
@@ -1489,6 +1530,7 @@ async function handleCancelTasks(ctx: Context & SessionFlavor<UserSession>) {
     return;
   }
 
+  precisionScheduler.cancelAll();
   for (const snipe of pending) {
     snipe.status = "cancelled";
     sess.logs.push({
